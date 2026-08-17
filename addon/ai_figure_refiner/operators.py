@@ -9,6 +9,7 @@ from .geometry import diagnostics as geo_diag
 from .geometry import printability as geo_print
 from .geometry import repair as geo_repair
 from .reference import views as ref_views
+from .semantic import parts as sem_parts
 
 
 _PIPELINE = Pipeline()
@@ -332,6 +333,92 @@ class AFR_OT_RefClearImage(bpy.types.Operator):
             return {"CANCELLED"}
 
 
+class AFR_OT_SemanticApplyHeuristics(bpy.types.Operator):
+    bl_idname = "afr.semantic_apply_heuristics"
+    bl_label = "应用几何启发式自动标注"
+
+    def execute(self, context):
+        obj = _resolve_source(context)
+        if obj is None or obj.type != "MESH":
+            logger.error("没有可用的网格源对象")
+            return {"CANCELLED"}
+        try:
+            sem_parts.ensure_part_attribute(obj)
+            labels = sem_parts.apply_heuristics(obj)
+            from collections import Counter
+            cnt = Counter(sem_parts.ID_PART[l] for l in labels)
+            logger.info("启发式标注完成 (共 %d 顶点): %s" % (
+                len(labels),
+                ", ".join("%s=%d" % kv for kv in cnt.most_common())))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("启发式标注失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_SemanticBrushFlood(bpy.types.Operator):
+    bl_idname = "afr.semantic_brush_flood"
+    bl_label = "整对象刷成指定部件"
+
+    label_name: bpy.props.EnumProperty(
+        name="部件",
+        items=[(n, n, "") for n in sem_parts.PART_LABELS],
+        default="BODY",
+    )
+
+    def execute(self, context):
+        obj = _resolve_source(context)
+        if obj is None or obj.type != "MESH":
+            logger.error("没有可用的网格源对象")
+            return {"CANCELLED"}
+        try:
+            sem_parts.brush_flood(obj, sem_parts.PART_ID[self.label_name])
+            logger.info("整对象已设为 %s" % self.label_name)
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("整对象刷失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_SemanticBrushUndo(bpy.types.Operator):
+    bl_idname = "afr.semantic_brush_undo"
+    bl_label = "撤销部件标注"
+
+    def execute(self, context):
+        obj = _resolve_source(context)
+        if obj is None or obj.type != "MESH":
+            logger.error("没有可用的网格源对象")
+            return {"CANCELLED"}
+        try:
+            prev = sem_parts.brush_undo(obj)
+            if prev is None:
+                logger.warning("没有可撤销的标注操作")
+            else:
+                logger.info("已撤销一步标注")
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("撤销失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_SemanticClearLabels(bpy.types.Operator):
+    bl_idname = "afr.semantic_clear_labels"
+    bl_label = "清空部件标注"
+
+    def execute(self, context):
+        obj = _resolve_source(context)
+        if obj is None or obj.type != "MESH":
+            logger.error("没有可用的网格源对象")
+            return {"CANCELLED"}
+        try:
+            sem_parts.brush_flood(obj, sem_parts.PART_ID["UNLABELED"])
+            logger.info("部件标注已清空")
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("清空失败: %s" % e)
+            return {"CANCELLED"}
+
+
 class AFR_OT_RefFocusView(bpy.types.Operator):
     bl_idname = "afr.ref_focus_view"
     bl_label = "切换到此参考视角"
@@ -418,4 +505,8 @@ CLASSES = (
     AFR_OT_RefLoadImage,
     AFR_OT_RefClearImage,
     AFR_OT_RefFocusView,
+    AFR_OT_SemanticApplyHeuristics,
+    AFR_OT_SemanticBrushFlood,
+    AFR_OT_SemanticBrushUndo,
+    AFR_OT_SemanticClearLabels,
 )

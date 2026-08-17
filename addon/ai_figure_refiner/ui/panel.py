@@ -74,6 +74,18 @@ class AFR_PT_Main(bpy.types.Panel):
             op = row.operator("afr.ref_clear_image", text="", icon="X")
             op.view_name = vname
 
+        # --- Semantic parts --------------------------------------------------
+        layout.separator()
+        box = layout.box()
+        box.label(text="部件语义识别 (HAIR/HEAD/BODY/FABRIC/BASE)", icon="GROUP_VCOL")
+        box.operator("afr.semantic_apply_heuristics", icon="AUTO")
+        row = box.row(align=True)
+        op = row.operator("afr.semantic_brush_flood", text="全设为 BODY", icon="BRUSH_DATA")
+        op.label_name = "BODY"
+        op = row.operator("afr.semantic_brush_flood", text="全清空", icon="X")
+        op.label_name = "UNLABELED"
+        box.operator("afr.semantic_brush_undo", icon="LOOP_BACK")
+
         # --- Print settings --------------------------------------------------
         layout.separator()
         box = layout.box()
