@@ -1,0 +1,1 @@
+"""AI Figure Refiner — core (session, logging, errors, pipeline)."""

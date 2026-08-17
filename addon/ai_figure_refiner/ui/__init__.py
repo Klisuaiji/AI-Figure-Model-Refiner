@@ -1,0 +1,1 @@
+"""AI Figure Refiner — UI panels."""
