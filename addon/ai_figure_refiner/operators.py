@@ -8,6 +8,7 @@ from .core.pipeline import Pipeline
 from .geometry import diagnostics as geo_diag
 from .geometry import printability as geo_print
 from .geometry import repair as geo_repair
+from .reference import views as ref_views
 
 
 _PIPELINE = Pipeline()
@@ -224,6 +225,140 @@ class AFR_OT_PrevStep(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class AFRRefView(bpy.types.PropertyGroup):
+    """One reference view slot."""
+    name: bpy.props.StringProperty(name="名称")
+    image_path: bpy.props.StringProperty(name="图片路径", subtype="FILE_PATH")
+    camera_obj: bpy.props.StringProperty(name="相机对象")
+    scale: bpy.props.FloatProperty(name="缩放", default=1.0, min=0.01, max=100.0)
+    offset_x: bpy.props.FloatProperty(name="偏移 X", default=0.0)
+    offset_y: bpy.props.FloatProperty(name="偏移 Y", default=0.0)
+    rotation_z: bpy.props.FloatProperty(name="绕 Z 旋转 (°)", default=0.0)
+
+
+class AFR_OT_RefCreateCameras(bpy.types.Operator):
+    bl_idname = "afr.ref_create_cameras"
+    bl_label = "创建 4 个参考相机（FRONT/BACK/LEFT/RIGHT）"
+
+    def execute(self, context):
+        try:
+            ref_views.ensure_ref_state(context.scene)
+            for name in ref_views.VIEW_NAMES:
+                cam = ref_views.get_or_create_camera(context.scene, name)
+                logger.info("参考相机 %s 已就绪" % cam.name)
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("创建参考相机失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_RefAlignToBBox(bpy.types.Operator):
+    bl_idname = "afr.ref_align_to_bbox"
+    bl_label = "参考相机对齐到对象包围盒"
+
+    def execute(self, context):
+        from .geometry.diagnostics import analyze_object
+        obj = _resolve_source(context)
+        if obj is None or obj.type != "MESH":
+            logger.error("没有可用的网格源对象")
+            return {"CANCELLED"}
+        try:
+            ref_views.ensure_ref_state(context.scene)
+            for name in ref_views.VIEW_NAMES:
+                cam = ref_views.align_camera_to_bbox(context.scene, name, obj)
+                logger.info("对齐 %s → %s" % (name, cam.name))
+            logger.info("4 个参考相机已对齐到 %s 包围盒" % obj.name)
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("对齐失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_RefLoadImage(bpy.types.Operator, ImportHelper):
+    bl_idname = "afr.ref_load_image"
+    bl_label = "加载参考图"
+
+    view_name: bpy.props.EnumProperty(
+        name="视角",
+        items=[(n, n, "") for n in ref_views.VIEW_NAMES],
+        default="FRONT",
+    )
+    filename_ext = ".png"
+    filter_glob: bpy.props.StringProperty(
+        default="*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.tif;*.tiff;*.exr",
+        options={"HIDDEN"},
+    )
+
+    def execute(self, context):
+        try:
+            ref_views.ensure_ref_state(context.scene)
+            img = ref_views.load_reference_image(
+                context.scene, self.view_name, self.filepath)
+            logger.info("参考图 %s → %s (%dx%d)" % (
+                self.view_name, self.filepath, img.size[0], img.size[1]))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("加载参考图失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_RefClearImage(bpy.types.Operator):
+    bl_idname = "afr.ref_clear_image"
+    bl_label = "清除参考图"
+
+    view_name: bpy.props.EnumProperty(
+        name="视角",
+        items=[(n, n, "") for n in ref_views.VIEW_NAMES],
+        default="FRONT",
+    )
+
+    def execute(self, context):
+        try:
+            slot = ref_views.get_view_slot(context.scene, self.view_name)
+            if slot and slot.camera_obj:
+                cam = bpy.data.objects.get(slot.camera_obj)
+                ref_views.detach_background(cam)
+            if slot:
+                slot.image_path = ""
+            # remove the image datablock if unused
+            name = "AFR_RefImg_" + self.view_name
+            img = bpy.data.images.get(name)
+            if img is not None and img.users == 0:
+                bpy.data.images.remove(img)
+            logger.info("参考图 %s 已清除" % self.view_name)
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("清除失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_RefFocusView(bpy.types.Operator):
+    bl_idname = "afr.ref_focus_view"
+    bl_label = "切换到此参考视角"
+
+    view_name: bpy.props.EnumProperty(
+        name="视角",
+        items=[(n, n, "") for n in ref_views.VIEW_NAMES],
+        default="FRONT",
+    )
+
+    def execute(self, context):
+        try:
+            cam = ref_views.get_or_create_camera(
+                context.scene, self.view_name)
+            context.scene.camera = cam
+            for area in context.screen.areas:
+                if area.type == "VIEW_3D":
+                    for space in area.spaces:
+                        if space.type == "VIEW_3D":
+                            space.region_3d.view_perspective = "CAMERA"
+            logger.info("当前视角 = %s" % cam.name)
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("切换失败: %s" % e)
+            return {"CANCELLED"}
+
+
 class AFR_OT_RunPrintability(bpy.types.Operator):
     bl_idname = "afr.run_printability"
     bl_label = "可打印性分析（壁厚/悬垂/悬空）"
@@ -269,6 +404,7 @@ class AFR_OT_RunPrintability(bpy.types.Operator):
 CLASSES = (
     AFRLogEntry,
     AFRPrintSettings,
+    AFRRefView,
     AFR_OT_ImportModel,
     AFR_OT_UseSelected,
     AFR_OT_RunDiagnostics,
@@ -277,4 +413,9 @@ CLASSES = (
     AFR_OT_NextStep,
     AFR_OT_PrevStep,
     AFR_OT_RunPrintability,
+    AFR_OT_RefCreateCameras,
+    AFR_OT_RefAlignToBBox,
+    AFR_OT_RefLoadImage,
+    AFR_OT_RefClearImage,
+    AFR_OT_RefFocusView,
 )

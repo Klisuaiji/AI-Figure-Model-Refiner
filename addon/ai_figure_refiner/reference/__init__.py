@@ -1,0 +1,1 @@
+"""Reference image module — 4 views + cameras + background images + silhouette."""

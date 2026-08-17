@@ -57,6 +57,23 @@ class AFR_PT_Main(bpy.types.Panel):
             for line in sc.afr_print_json.splitlines()[:24]:
                 box.label(text=line)
 
+        # --- Reference images ----------------------------------------------
+        layout.separator()
+        box = layout.box()
+        box.label(text="参考图系统 (FRONT/BACK/LEFT/RIGHT)", icon="IMAGE")
+        box.operator("afr.ref_create_cameras", icon="CAMERA_DATA")
+        box.operator("afr.ref_align_to_bbox", icon="FULLSCREEN_ENTER")
+        from ..reference.views import VIEW_NAMES
+        for vname in VIEW_NAMES:
+            row = box.row(align=True)
+            row.label(text=vname)
+            op = row.operator("afr.ref_focus_view", text="切换", icon="HAND")
+            op.view_name = vname
+            op = row.operator("afr.ref_load_image", text="图", icon="FILE_IMAGE")
+            op.view_name = vname
+            op = row.operator("afr.ref_clear_image", text="", icon="X")
+            op.view_name = vname
+
         # --- Print settings --------------------------------------------------
         layout.separator()
         box = layout.box()
