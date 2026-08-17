@@ -104,12 +104,23 @@ class AFR_PT_Main(bpy.types.Panel):
         box.operator("afr.generate_base", icon="MESH_CIRCLE")
         box.operator("afr.merge_selected", icon="GROUP")
         box.operator("afr.auto_orient", icon="ORPHAN_DATA")
+        box.operator("afr.voronoi_lattice", icon="MOD_WIREFRAME")
 
         # --- Export ---------------------------------------------------------
         layout.separator()
         box = layout.box()
-        box.label(text="导出 (Phase 11 — 自研 3MF)", icon="FILE_TICK")
+        box.label(text="导出 (Phase 11 + V0.6 多对象)", icon="FILE_TICK")
         box.operator("afr.export_3mf", icon="EXPORT")
+        box.operator("afr.export_multi_3mf", icon="EXPORT")
+        box.operator("afr.export_assembly_3mf", icon="FILE_3D")
+
+        # --- Slicer ---------------------------------------------------------
+        layout.separator()
+        box = layout.box()
+        box.label(text="切片器集成 (V0.6/V0.7)", icon="SCRIPT")
+        box.operator("afr.slicer_find", icon="VIEWZOOM")
+        box.operator("afr.slicer_export_ini", icon="FILE_TEXT")
+        box.operator("afr.slicer_verify_gcode", icon="CHECKMARK")
 
         # --- AI Worker ------------------------------------------------------
         layout.separator()

@@ -12,7 +12,10 @@ from .reference import views as ref_views
 from .semantic import parts as sem_parts
 from .parts_ops import hair as hair_ops
 from .parts_ops import generic as generic_ops
+from .parts_ops import voronoi as voronoi_ops
 from .exporter import three_mf as exp_3mf
+from .exporter import three_mf_multi as exp_3mf_multi
+from .slicer import integration as slicer_int
 from .ai_worker import launcher as ai_launcher
 from .ai_worker import protocol as ai_protocol
 
@@ -335,6 +338,138 @@ class AFR_OT_RefClearImage(bpy.types.Operator):
             return {"FINISHED"}
         except Exception as e:
             logger.error("清除失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_VoronoiLattice(bpy.types.Operator):
+    bl_idname = "afr.voronoi_lattice"
+    bl_label = "生成 Voronoi 减重微结构"
+
+    n_seeds: bpy.props.IntProperty(name="种子数", default=20, min=4, max=200)
+    lattice_radius: bpy.props.FloatProperty(name="线宽 (mm)", default=0.5,
+                                           min=0.1, max=3.0)
+
+    def execute(self, context):
+        obj = _resolve_source(context)
+        if obj is None or obj.type != "MESH":
+            logger.error("没有可用的网格源对象")
+            return {"CANCELLED"}
+        try:
+            new_obj = voronoi_ops.voronoi_lattice(
+                obj, n_seeds=self.n_seeds, lattice_radius=self.lattice_radius)
+            if new_obj is None:
+                logger.warning("Voronoi 生成失败（源对象可能为空或全在外部）")
+                return {"CANCELLED"}
+            logger.info("Voronoi 微结构已生成: %s (种子=%d)"
+                        % (new_obj.name, self.n_seeds))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("Voronoi 生成失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_ExportMulti3MF(bpy.types.Operator, ExportHelper):
+    bl_idname = "afr.export_multi_3mf"
+    bl_label = "导出多对象 3MF"
+    filename_ext = ".3mf"
+    filter_glob: bpy.props.StringProperty(default="*.3mf", options={"HIDDEN"})
+
+    def execute(self, context):
+        try:
+            res = exp_3mf_multi.export_multi_3mf(
+                self.filepath, context.scene)
+            logger.info("已导出多对象 3MF: %s" % res["filepath"])
+            logger.info("  对象=%d  build 项=%d  顶点=%d  三角形=%d  字节=%d" % (
+                res["object_count"], res["build_item_count"],
+                res["total_vertices"], res["total_triangles"],
+                res["size_bytes"]))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("多对象 3MF 导出失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_ExportAssembly3MF(bpy.types.Operator, ExportHelper):
+    bl_idname = "afr.export_assembly_3mf"
+    bl_label = "导出装配 3MF（嵌套 components）"
+    filename_ext = ".3mf"
+    filter_glob: bpy.props.StringProperty(default="*.3mf", options={"HIDDEN"})
+
+    def execute(self, context):
+        try:
+            res = exp_3mf_multi.export_assembly_3mf(
+                self.filepath, context.scene,
+                groups=[{"name": "AFR_Assembly"}])
+            logger.info("已导出装配 3MF: %s" % res["filepath"])
+            logger.info("  mesh 对象=%d  装配组=%d  build=%d  字节=%d" % (
+                res["mesh_object_count"], res["group_count"],
+                res["build_item_count"], res["size_bytes"]))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("装配 3MF 导出失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_SlicerFind(bpy.types.Operator):
+    bl_idname = "afr.slicer_find"
+    bl_label = "查找切片器（PrusaSlicer/OrcaSlicer/...）"
+
+    def execute(self, context):
+        try:
+            found = slicer_int.find_all_slicers()
+            if not found:
+                logger.warning("未在 PATH 上发现切片器，请安装 PrusaSlicer/OrcaSlicer")
+                return {"FINISHED"}
+            for path, name in found:
+                logger.info("  · %s → %s" % (name, path))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("查找切片器失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_SlicerExportINI(bpy.types.Operator, ExportHelper):
+    bl_idname = "afr.slicer_export_ini"
+    bl_label = "导出切片器 INI 配置（基于当前 FDM 设置）"
+    filename_ext = ".ini"
+    filter_glob: bpy.props.StringProperty(default="*.ini", options={"HIDDEN"})
+
+    def execute(self, context):
+        try:
+            ps = context.scene.afr_print
+            settings = {
+                "nozzle_mm": ps.nozzle_mm,
+                "layer_height_mm": ps.layer_height_mm,
+                "material": ps.material,
+                "min_wall_thickness_mm": ps.min_wall_thickness_mm,
+                "density_g_cm3": ps.density_g_cm3,
+            }
+            text = slicer_int.generate_ini_profile(settings, filepath=self.filepath)
+            logger.info("已导出 INI: %s (%d 行)" % (self.filepath, len(text.splitlines())))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("INI 导出失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_SlicerVerifyGCode(bpy.types.Operator, ImportHelper):
+    bl_idname = "afr.slicer_verify_gcode"
+    bl_label = "校验 G-code（解析 retractions/支撑标记）"
+    filename_ext = ".gcode"
+    filter_glob: bpy.props.StringProperty(
+        default="*.gcode;*.gco", options={"HIDDEN"})
+
+    def execute(self, context):
+        try:
+            r = slicer_int.verify_gcode(self.filepath)
+            logger.info("G-code: %d 行, G1=%d G0=%d, retract=%d, 支撑=%d, 层数=%d" % (
+                r["max_lines"], r["g1_moves"], r["g0_travels"],
+                r["retractions"], r["support_moves"], r["z_layer_changes"]))
+            for issue in r["issues"]:
+                logger.warning("  · " + issue)
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("G-code 校验失败: %s" % e)
             return {"CANCELLED"}
 
 
@@ -734,4 +869,10 @@ CLASSES = (
     AFR_OT_Export3MF,
     AFR_OT_AIWorkerCheck,
     AFR_OT_AIStubTest,
+    AFR_OT_VoronoiLattice,
+    AFR_OT_ExportMulti3MF,
+    AFR_OT_ExportAssembly3MF,
+    AFR_OT_SlicerFind,
+    AFR_OT_SlicerExportINI,
+    AFR_OT_SlicerVerifyGCode,
 )
