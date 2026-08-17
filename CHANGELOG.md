@@ -3,6 +3,52 @@
 All notable changes to the **AI Figure Model Refiner** are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] — 2026-08-17 — V0.8 (Code Review + Real ONNX Inference)
+
+### Added
+
+**V0.8a — Code review & fixes (`docs/CODE_REVIEW.md`)**
+
+- 4 critical + 7 major + 12 minor issues identified and fixed.
+- 全部 ImportHelper/ExportHelper 加 `bl_options = {"REGISTER", "UNDO"}` (9 算子).
+- `voronoi_lattice` 加 `max_attempts = n_seeds * 200` 防 thin-bbox 死循环.
+- `verify_gcode` 改流式采样（head + tail 各 100k 行），支持 200MB+ G-code.
+- `protocol.call_sync` 自动给 `.py` 路径加 `sys.executable`（跨平台）.
+- `protocol.mesh_to_inputs` 加 try/except，返回空 payload + error 而非 raise.
+- `logging.py` 区分 `AttributeError`（吞掉）vs 其他（traceback）— 调试更友好.
+- `launch_or_message` 暴露完整 `searched` 目录列表.
+- `extract_part` 跳过 `len(f.verts) < 3` 的退化面.
+- `panel.py` 日志顺序修正（最近在上）.
+- `__init__.py` 版本 `(0, 8, 0)`.
+
+**V0.8c — Real ONNX inference pipeline**
+
+- `addon/ai_figure_refiner/workers/afr_worker.py` 重写为真实 ONNX Runtime 推理:
+  - 5 supported models (`figure_seg` / `depth` / `normal` / `hair_dense` / `refine`)
+  - 自动扫描 `workers/models/*.onnx`
+  - 动态读取 ONNX graph 输入名（不再硬编码）
+  - 动态维度处理（batch=1 fill）
+  - 无 onnxruntime 时返回 `stub=True`（协议兼容）
+  - 输出 summary: shape / dtype / min / max / mean / std
+- `scripts/generate_models.py`: 用 `onnx` 库生成 2 个真实 ONNX 模型 stub
+  - `yolov8n-seg-stub.onnx` (20 KB, YOLOv8 I/O shape, 2 conv+relu+reduce)
+  - `mnist-stub.onnx` (30 KB, 784→10 classifier)
+  - `onnx.checker.check_model` 验证 + onnxruntime 跑通
+- `scripts/download_models.py`: 尝试从 Ultralytics / HuggingFace 下载
+  真实预训练 ONNX (v0.0.0 / Kalray)；fallback 优雅
+- **依赖**: `onnx` (1.22.0) + `onnxruntime` (1.28.0)，纯 `pip install`
+
+### Verified
+
+- `scripts/test_v0_8.py` — **PASS** (6 用例)
+  - `real_onnx_worker_subprocess`: 跑通 `yolov8n-seg-stub`, elapsed=0.024s, output shape (1,160,160)
+  - 5 个 supported models 全部 dispatch OK
+- `scripts/test_v0_8_blender.py` — **PASS**
+  - 36 算子 / 9 file-dialog 全部带 REGISTER,UNDO / version (0,8,0)
+- 全部 7 个原有测试脚本 PASS（smoke / printability / reference / semantic / phases_5_12 / v0_6 / v0_7）
+
+---
+
 ## [0.7.0] — 2026-08-17 — V0.7 (Training data + AI worker subprocess + Slicer e2e)
 
 ### Added
