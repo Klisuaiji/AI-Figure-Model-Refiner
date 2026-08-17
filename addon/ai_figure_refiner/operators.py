@@ -1,7 +1,7 @@
 import json
 
 import bpy
-from bpy_extras.io_utils import ImportHelper
+from bpy_extras.io_utils import ImportHelper, ExportHelper
 
 from .core.logging import logger
 from .core.pipeline import Pipeline
@@ -10,6 +10,11 @@ from .geometry import printability as geo_print
 from .geometry import repair as geo_repair
 from .reference import views as ref_views
 from .semantic import parts as sem_parts
+from .parts_ops import hair as hair_ops
+from .parts_ops import generic as generic_ops
+from .exporter import three_mf as exp_3mf
+from .ai_worker import launcher as ai_launcher
+from .ai_worker import protocol as ai_protocol
 
 
 _PIPELINE = Pipeline()
@@ -333,6 +338,216 @@ class AFR_OT_RefClearImage(bpy.types.Operator):
             return {"CANCELLED"}
 
 
+class AFR_OT_HairExtract(bpy.types.Operator):
+    bl_idname = "afr.hair_extract"
+    bl_label = "提取 HAIR 部件到新对象"
+
+    def execute(self, context):
+        obj = _resolve_source(context)
+        if obj is None or obj.type != "MESH":
+            logger.error("没有可用的网格源对象")
+            return {"CANCELLED"}
+        try:
+            new_obj = hair_ops.extract_part(obj, sem_parts.PART_ID["HAIR"])
+            if new_obj is None:
+                logger.warning("未找到 HAIR 顶点，请先应用启发式标注")
+                return {"CANCELLED"}
+            logger.info("HAIR 已提取到 %s" % new_obj.name)
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("提取失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_HairSolidify(bpy.types.Operator):
+    bl_idname = "afr.hair_solidify"
+    bl_label = "头发加厚（Solidify）"
+
+    thickness: bpy.props.FloatProperty(
+        name="壁厚 (mm)", default=0.4, min=0.05, max=2.0)
+
+    def execute(self, context):
+        obj = _resolve_source(context)
+        if obj is None or obj.type != "MESH":
+            logger.error("没有可用的网格源对象")
+            return {"CANCELLED"}
+        try:
+            ok = hair_ops.solidify_part(obj, thickness=self.thickness)
+            if ok:
+                logger.info("头发已加厚 %.2f mm" % self.thickness)
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("加厚失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_HairGenerate(bpy.types.Operator):
+    bl_idname = "afr.hair_generate"
+    bl_label = "程序化生成头发（曲线→加厚网格）"
+
+    count: bpy.props.IntProperty(name="发丝数", default=200, min=10, max=2000)
+    scalp_radius: bpy.props.FloatProperty(name="头皮半径", default=0.3, min=0.05, max=2.0)
+    length_min: bpy.props.FloatProperty(name="最短长度 (mm)", default=0.5, min=0.05)
+    length_max: bpy.props.FloatProperty(name="最长长度 (mm)", default=1.2, min=0.05)
+    curl: bpy.props.FloatProperty(name="卷曲", default=0.3, min=0.0, max=1.0)
+    noise: bpy.props.FloatProperty(name="噪声", default=0.2, min=0.0, max=1.0)
+    radius: bpy.props.FloatProperty(name="单丝半径 (mm)", default=0.04, min=0.01, max=0.5)
+
+    def execute(self, context):
+        obj = _resolve_source(context)
+        scalp_z = 2.0
+        if obj is not None and obj.type == "MESH":
+            zs = [(obj.matrix_world @ v.co).z for v in obj.data.vertices]
+            scalp_z = (max(zs) + min(zs)) / 2 + (max(zs) - min(zs)) * 0.35
+        try:
+            curves = hair_ops.generate_hair_curves(
+                context.scene,
+                dict(scalp_z=scalp_z, scalp_radius=self.scalp_radius,
+                     count=self.count, length_min=self.length_min,
+                     length_max=self.length_max, curl=self.curl,
+                     noise=self.noise, taper=1.5, seed=0))
+            meshed = hair_ops.curves_to_mesh(curves, radius=self.radius)
+            logger.info("已生成 %d 根头发 → %s (MESH)" % (self.count, meshed.name))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("生成头发失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_FabricSolidify(bpy.types.Operator):
+    bl_idname = "afr.fabric_solidify"
+    bl_label = "布料加厚（Solidify）"
+
+    thickness: bpy.props.FloatProperty(
+        name="壁厚 (mm)", default=0.6, min=0.1, max=2.0)
+
+    def execute(self, context):
+        obj = _resolve_source(context)
+        if obj is None or obj.type != "MESH":
+            logger.error("没有可用的网格源对象")
+            return {"CANCELLED"}
+        try:
+            generic_ops.solidify_fabric(obj, thickness=self.thickness)
+            logger.info("布料已加厚 %.2f mm" % self.thickness)
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("布料加厚失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_GenerateBase(bpy.types.Operator):
+    bl_idname = "afr.generate_base"
+    bl_label = "生成底座（圆柱）"
+
+    radius: bpy.props.FloatProperty(name="半径 (mm)", default=0.0, min=0.0)
+    height: bpy.props.FloatProperty(name="高度 (mm)", default=3.0, min=0.5)
+
+    def execute(self, context):
+        obj = _resolve_source(context)
+        if obj is None or obj.type != "MESH":
+            logger.error("没有可用的网格源对象")
+            return {"CANCELLED"}
+        try:
+            rad = self.radius if self.radius > 0 else None
+            base = generic_ops.generate_base(
+                context.scene, obj, radius=rad, height=self.height)
+            logger.info("底座已生成: %s (半径=%.2f mm, 高=%.2f mm)"
+                        % (base.name, base.dimensions.x / 2, self.height))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("底座生成失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_MergeSelected(bpy.types.Operator):
+    bl_idname = "afr.merge_selected"
+    bl_label = "合并选中对象（Boolean Union）"
+
+    def execute(self, context):
+        sel = [o for o in context.selected_objects if o.type == "MESH"]
+        if len(sel) < 2:
+            logger.error("需要至少 2 个 MESH 选中")
+            return {"CANCELLED"}
+        try:
+            merged = generic_ops.merge_parts(context.scene, sel)
+            logger.info("已合并 %d 个对象 → %s" % (len(sel), merged.name))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("合并失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_AutoOrient(bpy.types.Operator):
+    bl_idname = "afr.auto_orient"
+    bl_label = "自动定向（落地）"
+
+    def execute(self, context):
+        obj = _resolve_source(context)
+        if obj is None or obj.type != "MESH":
+            logger.error("没有可用的网格源对象")
+            return {"CANCELLED"}
+        try:
+            r = generic_ops.auto_orient(obj)
+            logger.info("已定向: 偏移 (%.2f, %.2f, %.2f)" % (r[3], r[4], r[5]))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("定向失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_Export3MF(bpy.types.Operator, ExportHelper):
+    bl_idname = "afr.export_3mf"
+    bl_label = "导出 3MF（自研实现）"
+    filename_ext = ".3mf"
+    filter_glob: bpy.props.StringProperty(
+        default="*.3mf", options={"HIDDEN"})
+
+    def execute(self, context):
+        obj = _resolve_source(context)
+        if obj is None or obj.type != "MESH":
+            logger.error("没有可用的网格源对象")
+            return {"CANCELLED"}
+        try:
+            res = exp_3mf.export_3mf(obj, self.filepath)
+            logger.info("已导出 3MF: %s" % res["filepath"])
+            logger.info("  顶点=%d  三角形=%d  字节=%d" % (
+                res["vertices"], res["triangles"], res["size_bytes"]))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("3MF 导出失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_AIWorkerCheck(bpy.types.Operator):
+    bl_idname = "afr.ai_worker_check"
+    bl_label = "检查 AI Worker 状态"
+
+    def execute(self, context):
+        st = ai_launcher.launch_or_message()
+        if st.get("ok"):
+            logger.info("AI worker 就绪: %s" % st["worker"])
+        else:
+            logger.warning("AI worker 未找到")
+            for hint in (st.get("hint", ""),):
+                logger.warning("  · " + hint)
+        return {"FINISHED"}
+
+
+class AFR_OT_AIStubTest(bpy.types.Operator):
+    bl_idname = "afr.ai_stub_test"
+    bl_label = "测试 AI Worker 协议（Stub）"
+
+    def execute(self, context):
+        req = ai_protocol.make_request(
+            model="figure_seg", task="segment",
+            inputs={"object_name": "test", "vertices": [[0, 0, 0]],
+                    "faces": []})
+        resp = ai_launcher.stub_worker_response(req)
+        logger.info("Stub response: ok=%s stub=%s" % (
+            resp.get("ok"), resp.get("stub")))
+        return {"FINISHED"}
+
+
 class AFR_OT_SemanticApplyHeuristics(bpy.types.Operator):
     bl_idname = "afr.semantic_apply_heuristics"
     bl_label = "应用几何启发式自动标注"
@@ -509,4 +724,14 @@ CLASSES = (
     AFR_OT_SemanticBrushFlood,
     AFR_OT_SemanticBrushUndo,
     AFR_OT_SemanticClearLabels,
+    AFR_OT_HairExtract,
+    AFR_OT_HairSolidify,
+    AFR_OT_HairGenerate,
+    AFR_OT_FabricSolidify,
+    AFR_OT_GenerateBase,
+    AFR_OT_MergeSelected,
+    AFR_OT_AutoOrient,
+    AFR_OT_Export3MF,
+    AFR_OT_AIWorkerCheck,
+    AFR_OT_AIStubTest,
 )

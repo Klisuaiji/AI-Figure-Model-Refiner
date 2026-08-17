@@ -86,6 +86,38 @@ class AFR_PT_Main(bpy.types.Panel):
         op.label_name = "UNLABELED"
         box.operator("afr.semantic_brush_undo", icon="LOOP_BACK")
 
+        # --- Hair refinement ------------------------------------------------
+        layout.separator()
+        box = layout.box()
+        box.label(text="头发精修 (Phase 5)", icon="HAIR")
+        box.operator("afr.hair_extract", icon="MESH_DATA")
+        op = box.operator("afr.hair_solidify", icon="MOD_SOLIDIFY")
+        op.thickness = ps.min_wall_thickness_mm
+        box.operator("afr.hair_generate", icon="CURVE_DATA")
+
+        # --- Fabric / Base / Merge / Orient ----------------------------------
+        layout.separator()
+        box = layout.box()
+        box.label(text="布料/底座/合并/定向 (Phase 6-9)", icon="TOOL_SETTINGS")
+        op = box.operator("afr.fabric_solidify", icon="MOD_SOLIDIFY")
+        op.thickness = ps.min_wall_thickness_mm
+        box.operator("afr.generate_base", icon="MESH_CIRCLE")
+        box.operator("afr.merge_selected", icon="GROUP")
+        box.operator("afr.auto_orient", icon="ORPHAN_DATA")
+
+        # --- Export ---------------------------------------------------------
+        layout.separator()
+        box = layout.box()
+        box.label(text="导出 (Phase 11 — 自研 3MF)", icon="FILE_TICK")
+        box.operator("afr.export_3mf", icon="EXPORT")
+
+        # --- AI Worker ------------------------------------------------------
+        layout.separator()
+        box = layout.box()
+        box.label(text="AI Worker (Phase 12 — 外部)", icon="NETWORK")
+        box.operator("afr.ai_worker_check", icon="QUESTION")
+        box.operator("afr.ai_stub_test", icon="PLAY")
+
         # --- Print settings --------------------------------------------------
         layout.separator()
         box = layout.box()
