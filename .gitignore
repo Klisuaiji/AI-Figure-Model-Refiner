@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+output/
+*.blend1
+.DS_Store
+.workbuddy/
+*.log
