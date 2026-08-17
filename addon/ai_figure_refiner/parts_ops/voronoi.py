@@ -77,11 +77,13 @@ def voronoi_lattice(obj, n_seeds=20, lattice_radius=0.5, name="AFR_Voronoi"):
         bdiag = (bbox_max - bbox_min).length
         bvh = _build_bvh(bm)
 
-        # 1. rejection-sample seeds
+        # 1. rejection-sample seeds (hard cap to prevent infinite loops
+        #    on thin or empty bbox regions).
         rng = random.Random(0)
         seeds = []
         attempts = 0
-        while len(seeds) < n_seeds and attempts < n_seeds * 50:
+        max_attempts = n_seeds * 200
+        while len(seeds) < n_seeds and attempts < max_attempts:
             attempts += 1
             p = Vector((
                 rng.uniform(bbox_min.x, bbox_max.x),

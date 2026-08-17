@@ -1,5 +1,6 @@
 import bpy
 import time
+import traceback
 
 
 class Logger:
@@ -23,9 +24,15 @@ class Logger:
             # cap the log size
             while len(sc.afr_log) > self.MAX_LINES:
                 sc.afr_log.remove(0)
-        except Exception:
-            # logger must never raise
+        except (AttributeError, TypeError, KeyError):
+            # scene / property not ready; safe to ignore during early
+            # register() or during scene reload.
             pass
+        except Exception as e:
+            # unexpected — print once but never propagate (the logger
+            # must never raise, that would crash the calling operator).
+            traceback.print_exc()
+            print("[AFR logger internal] %s" % e)
 
     def log(self, level, text):
         line = "[%s] %s" % (level, text)

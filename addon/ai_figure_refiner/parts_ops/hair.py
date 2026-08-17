@@ -36,6 +36,10 @@ def extract_part(obj, label_id, new_name=None):
         keep_faces = []
         vert_map = {}  # original BMVert object -> new bmesh vert
         for f in bm.faces:
+            if len(f.verts) < 3:
+                # skip degenerate faces (1 or 2 verts); they have no
+                # well-defined majority and would corrupt the output mesh
+                continue
             n_match = sum(1 for v in f.verts if labels[v.index] == label_id)
             if n_match >= max(1, len(f.verts) // 2):
                 keep_faces.append(f)

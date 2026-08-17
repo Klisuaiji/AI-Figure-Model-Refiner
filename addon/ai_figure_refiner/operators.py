@@ -63,6 +63,7 @@ class AFRPrintSettings(bpy.types.PropertyGroup):
 class AFR_OT_ImportModel(bpy.types.Operator, ImportHelper):
     bl_idname = "afr.import_model"
     bl_label = "导入模型 (FBX/OBJ/GLB/STL/PLY)"
+    bl_options = {"REGISTER", "UNDO"}
     filename_ext = ".fbx"
 
     filter_glob: bpy.props.StringProperty(
@@ -287,6 +288,7 @@ class AFR_OT_RefAlignToBBox(bpy.types.Operator):
 class AFR_OT_RefLoadImage(bpy.types.Operator, ImportHelper):
     bl_idname = "afr.ref_load_image"
     bl_label = "加载参考图"
+    bl_options = {"REGISTER", "UNDO"}
 
     view_name: bpy.props.EnumProperty(
         name="视角",
@@ -386,6 +388,7 @@ class AFR_OT_AIWorkerCall(bpy.types.Operator):
 class AFR_OT_SlicerSlice3MF(bpy.types.Operator, ExportHelper):
     bl_idname = "afr.slicer_slice_3mf"
     bl_label = "导出 3MF 并调用切片器"
+    bl_options = {"REGISTER", "UNDO"}
     filename_ext = ".3mf"
     filter_glob: bpy.props.StringProperty(default="*.3mf", options={"HIDDEN"})
 
@@ -430,6 +433,7 @@ class AFR_OT_SlicerSlice3MF(bpy.types.Operator, ExportHelper):
 class AFR_OT_ExportTrainingData(bpy.types.Operator, ExportHelper):
     bl_idname = "afr.export_training_data"
     bl_label = "导出训练数据（V0.7 manifest JSON）"
+    bl_options = {"REGISTER", "UNDO"}
     filename_ext = ".json"
     filter_glob: bpy.props.StringProperty(default="*.json", options={"HIDDEN"})
 
@@ -476,6 +480,7 @@ class AFR_OT_VoronoiLattice(bpy.types.Operator):
 class AFR_OT_ExportMulti3MF(bpy.types.Operator, ExportHelper):
     bl_idname = "afr.export_multi_3mf"
     bl_label = "导出多对象 3MF"
+    bl_options = {"REGISTER", "UNDO"}
     filename_ext = ".3mf"
     filter_glob: bpy.props.StringProperty(default="*.3mf", options={"HIDDEN"})
 
@@ -497,6 +502,7 @@ class AFR_OT_ExportMulti3MF(bpy.types.Operator, ExportHelper):
 class AFR_OT_ExportAssembly3MF(bpy.types.Operator, ExportHelper):
     bl_idname = "afr.export_assembly_3mf"
     bl_label = "导出装配 3MF（嵌套 components）"
+    bl_options = {"REGISTER", "UNDO"}
     filename_ext = ".3mf"
     filter_glob: bpy.props.StringProperty(default="*.3mf", options={"HIDDEN"})
 
@@ -536,6 +542,7 @@ class AFR_OT_SlicerFind(bpy.types.Operator):
 class AFR_OT_SlicerExportINI(bpy.types.Operator, ExportHelper):
     bl_idname = "afr.slicer_export_ini"
     bl_label = "导出切片器 INI 配置（基于当前 FDM 设置）"
+    bl_options = {"REGISTER", "UNDO"}
     filename_ext = ".ini"
     filter_glob: bpy.props.StringProperty(default="*.ini", options={"HIDDEN"})
 
@@ -560,6 +567,7 @@ class AFR_OT_SlicerExportINI(bpy.types.Operator, ExportHelper):
 class AFR_OT_SlicerVerifyGCode(bpy.types.Operator, ImportHelper):
     bl_idname = "afr.slicer_verify_gcode"
     bl_label = "校验 G-code（解析 retractions/支撑标记）"
+    bl_options = {"REGISTER", "UNDO"}
     filename_ext = ".gcode"
     filter_glob: bpy.props.StringProperty(
         default="*.gcode;*.gco", options={"HIDDEN"})
@@ -738,6 +746,7 @@ class AFR_OT_AutoOrient(bpy.types.Operator):
 class AFR_OT_Export3MF(bpy.types.Operator, ExportHelper):
     bl_idname = "afr.export_3mf"
     bl_label = "导出 3MF（自研实现）"
+    bl_options = {"REGISTER", "UNDO"}
     filename_ext = ".3mf"
     filter_glob: bpy.props.StringProperty(
         default="*.3mf", options={"HIDDEN"})

@@ -154,7 +154,9 @@ class AFR_PT_Main(bpy.types.Panel):
         box.label(text="日志", icon="TEXT")
         if not sc.afr_log:
             box.label(text="(无)")
-        for entry in reversed(list(sc.afr_log)[-30:]):
+        # Most recent first: take last 30 entries, then iterate in reverse.
+        recent = list(sc.afr_log)[-30:]
+        for entry in reversed(recent):
             icon = "ERROR" if entry.level == "ERROR" else (
                 "ERROR" if entry.level == "WARNING" else "TEXT"
             )

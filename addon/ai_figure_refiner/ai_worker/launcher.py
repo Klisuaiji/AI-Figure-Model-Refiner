@@ -41,22 +41,26 @@ def find_worker(extra_paths=None):
     return None
 
 
+def _search_dirs():
+    here = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+    return [os.path.join(here, "workers")]
+
+
 def launch_or_message():
     """Either return the worker path or a diagnostic message (no
     subprocess is started here — the actual call lives in
     `protocol.call_sync`)."""
     p = find_worker()
+    searched = _search_dirs()
     if p:
-        return {"ok": True, "worker": p}
+        return {"ok": True, "worker": p, "searched": searched}
     return {
         "ok": False,
         "error": ("AI worker not found. Place `afr_worker.py` under "
                   "`<addon_dir>/workers/` or add its directory to PATH. "
                   "The worker should accept a JSON request on stdin and "
                   "emit one JSON response on stdout."),
-        "searched": [
-            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "workers"),
-        ],
+        "searched": searched,
         "hint": ("Set up workers/ with a Python venv that has "
                  "`onnxruntime opencv-python numpy Pillow` installed."),
     }

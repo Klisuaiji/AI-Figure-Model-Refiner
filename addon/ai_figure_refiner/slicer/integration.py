@@ -167,8 +167,13 @@ def slice_model(slicer_path, model_3mf_path, output_gcode=None,
 # ---------------------------------------------------------------------------
 # G-code verification (lightweight)
 # ---------------------------------------------------------------------------
-def verify_gcode(gcode_path, max_file_mb=50):
+def verify_gcode(gcode_path, max_file_mb=200, sample_lines=100000):
     """Parse a G-code file and return basic sanity metrics.
+
+    For files larger than max_file_mb we use **streaming sampling**:
+    the first `sample_lines` and the last `sample_lines` lines are
+    parsed, which gives a representative approximation without
+    holding the whole file in memory.
 
     Heuristics:
       - counts G1 moves (print moves), G0 (travels)
@@ -177,7 +182,7 @@ def verify_gcode(gcode_path, max_file_mb=50):
         "; support" or ";TYPE:Support" comments)
       - warns if no G1 found, file suspiciously small, or no support
         markers but model has overhangs (caller's responsibility to
-        pass `expected_supports`)
+        pass `expected_supports`).
     """
     out = {
         "path": gcode_path,
@@ -190,53 +195,71 @@ def verify_gcode(gcode_path, max_file_mb=50):
         "z_layer_changes": 0,
         "support_moves": 0,
         "max_lines": 0,
+        "sampled": False,
         "issues": [],
     }
     if not os.path.isfile(gcode_path):
         out["issues"].append("file does not exist")
         return out
-    if out["size_bytes"] > max_file_mb * 1024 * 1024:
-        out["issues"].append("file too large (>%d MB), skipping parse"
-                             % max_file_mb)
-        return out
+    streaming = out["size_bytes"] > max_file_mb * 1024 * 1024
+    out["sampled"] = streaming
     last_z = None
-    with open(gcode_path, "r", encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            out["max_lines"] += 1
-            line = line.strip()
-            if not line:
-                continue
-            # comment-based support markers
-            if line.startswith(";"):
-                if "support" in line.lower() or ";type:support" in line.lower():
-                    out["support_moves"] += 1
-                if "retract" in line.lower():
-                    out["retractions"] += 1
-                continue
-            head = line.split(" ", 1)[0]
-            if head == "G1" or head == "G0":
-                # comment-based retract markers (anywhere in line)
-                if ";retract" in line.lower() or "; retract" in line.lower():
-                    out["retractions"] += 1
-                # extract E and Z
-                m_e = re.search(r"E(-?\d+\.?\d*)", line)
-                if m_e:
-                    e_val = float(m_e.group(1))
-                    if head == "G1":
-                        if e_val < 0:
-                            out["retractions"] += 1
-                        elif e_val > 0 and out["retractions"] > out["unretractions"]:
-                            out["unretractions"] += 1
-                m_z = re.search(r"Z(-?\d+\.?\d*)", line)
-                if m_z:
-                    z_val = float(m_z.group(1))
-                    if last_z is None or abs(z_val - last_z) > 1e-3:
-                        out["z_layer_changes"] += 1
-                        last_z = z_val
+
+    def _scan_line(line):
+        nonlocal last_z
+        out["max_lines"] += 1
+        line = line.strip()
+        if not line:
+            return
+        if line.startswith(";"):
+            if "support" in line.lower() or ";type:support" in line.lower():
+                out["support_moves"] += 1
+            if "retract" in line.lower():
+                out["retractions"] += 1
+            return
+        head = line.split(" ", 1)[0]
+        if head == "G1" or head == "G0":
+            if ";retract" in line.lower() or "; retract" in line.lower():
+                out["retractions"] += 1
+            m_e = re.search(r"E(-?\d+\.?\d*)", line)
+            if m_e:
+                e_val = float(m_e.group(1))
                 if head == "G1":
-                    out["g1_moves"] += 1
+                    if e_val < 0:
+                        out["retractions"] += 1
+                    elif e_val > 0 and out["retractions"] > out["unretractions"]:
+                        out["unretractions"] += 1
+            m_z = re.search(r"Z(-?\d+\.?\d*)", line)
+            if m_z:
+                z_val = float(m_z.group(1))
+                if last_z is None or abs(z_val - last_z) > 1e-3:
+                    out["z_layer_changes"] += 1
+                    last_z = z_val
+            if head == "G1":
+                out["g1_moves"] += 1
+            else:
+                out["g0_travels"] += 1
+
+    if not streaming:
+        with open(gcode_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                _scan_line(line)
+    else:
+        # head + tail sampling
+        head_lines = []
+        tail_lines = []
+        with open(gcode_path, "r", encoding="utf-8", errors="ignore") as f:
+            for i, line in enumerate(f):
+                if i < sample_lines:
+                    head_lines.append(line)
                 else:
-                    out["g0_travels"] += 1
+                    tail_lines.append(line)
+                    if len(tail_lines) > sample_lines:
+                        tail_lines.pop(0)
+        for line in head_lines:
+            _scan_line(line)
+        for line in tail_lines:
+            _scan_line(line)
     if out["g1_moves"] == 0:
         out["issues"].append("no G1 print moves found (empty/unsupported file?)")
     if out["retractions"] == 0:
