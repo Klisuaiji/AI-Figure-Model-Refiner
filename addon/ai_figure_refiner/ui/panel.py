@@ -47,6 +47,16 @@ class AFR_PT_Main(bpy.types.Panel):
             for line in sc.afr_diag_json.splitlines()[:20]:
                 box.label(text=line)
 
+        # --- Printability ---------------------------------------------------
+        layout.separator()
+        box = layout.box()
+        box.label(text="可打印性分析", icon="PRINT")
+        box.operator("afr.run_printability", icon="VIEWZOOM")
+        if sc.afr_print_json:
+            box.label(text="最近一次可打印性", icon="INFO")
+            for line in sc.afr_print_json.splitlines()[:24]:
+                box.label(text=line)
+
         # --- Print settings --------------------------------------------------
         layout.separator()
         box = layout.box()

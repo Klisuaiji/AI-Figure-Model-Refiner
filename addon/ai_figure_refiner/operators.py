@@ -6,6 +6,7 @@ from bpy_extras.io_utils import ImportHelper
 from .core.logging import logger
 from .core.pipeline import Pipeline
 from .geometry import diagnostics as geo_diag
+from .geometry import printability as geo_print
 from .geometry import repair as geo_repair
 
 
@@ -223,6 +224,48 @@ class AFR_OT_PrevStep(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class AFR_OT_RunPrintability(bpy.types.Operator):
+    bl_idname = "afr.run_printability"
+    bl_label = "可打印性分析（壁厚/悬垂/悬空）"
+
+    def execute(self, context):
+        obj = _resolve_source(context)
+        if obj is None or obj.type != "MESH":
+            logger.error("没有可用的网格源对象")
+            return {"CANCELLED"}
+        ps = context.scene.afr_print
+        try:
+            res = geo_print.analyze_printability(
+                obj,
+                min_wall_mm=ps.min_wall_thickness_mm,
+                nozzle_mm=ps.nozzle_mm,
+                layer_height_mm=ps.layer_height_mm,
+                overhang_angle_deg=45.0,
+            )
+            context.scene.afr_print_json = json.dumps(res, ensure_ascii=False, indent=2)
+            w = res["wall_thickness"]
+            logger.info("壁厚  min=%.3fmm  max=%.3fmm  avg=%.3fmm" % (
+                w["min_mm"], w["max_mm"], w["avg_mm"]))
+            logger.info("  低于最低壁厚的面: %d / %d (面积 %.2fmm²)" % (
+                w["below_threshold_faces"], w["sampled_faces"], w["below_threshold_area_mm2"]))
+            o = res["overhang"]
+            logger.info("悬垂  面=%d  面积=%.2fmm²  占比=%.1f%%" % (
+                o["overhang_faces"], o["overhang_area_mm2"], o["overhang_area_pct"]))
+            f = res["floating"]
+            logger.info("悬空部件  总连通分量=%d  悬空=%d  (悬空顶点=%d, 占比=%.1f%%)" % (
+                f["total_components"], f["floating_count"], f["floating_verts"],
+                f["floating_pct"]))
+            v = res["validation"]
+            logger.info("打印验证  可打印=%s  严重度=%s  问题=%d 条" % (
+                v["printable"], v["severity"], len(v["issues"])))
+            for issue in v["issues"]:
+                logger.warning("  · " + issue)
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("可打印性分析失败: %s" % e)
+            return {"CANCELLED"}
+
+
 CLASSES = (
     AFRLogEntry,
     AFRPrintSettings,
@@ -233,4 +276,5 @@ CLASSES = (
     AFR_OT_Rollback,
     AFR_OT_NextStep,
     AFR_OT_PrevStep,
+    AFR_OT_RunPrintability,
 )
