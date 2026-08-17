@@ -18,6 +18,7 @@ from .exporter import three_mf_multi as exp_3mf_multi
 from .slicer import integration as slicer_int
 from .ai_worker import launcher as ai_launcher
 from .ai_worker import protocol as ai_protocol
+from .training import export as training_export
 
 
 _PIPELINE = Pipeline()
@@ -338,6 +339,110 @@ class AFR_OT_RefClearImage(bpy.types.Operator):
             return {"FINISHED"}
         except Exception as e:
             logger.error("清除失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_AIWorkerCall(bpy.types.Operator):
+    bl_idname = "afr.ai_worker_call"
+    bl_label = "调用 AI Worker（subprocess 实际运行）"
+
+    model: bpy.props.EnumProperty(
+        name="模型",
+        items=[(n, n, "") for n in ai_protocol.SUPPORTED_MODELS],
+        default="figure_seg",
+    )
+    task: bpy.props.StringProperty(name="任务", default="segment")
+
+    def execute(self, context):
+        worker = ai_launcher.find_worker()
+        if worker is None:
+            logger.warning("AI worker 未找到，使用 stub 响应")
+            req = ai_protocol.make_request(self.model, self.task,
+                                           inputs={"object_name": "<none>"})
+            resp = ai_launcher.stub_worker_response(req)
+        else:
+            obj = _resolve_source(context)
+            inputs = {"object_name": obj.name if obj else "<none>"}
+            if obj is not None and obj.type == "MESH":
+                inputs = ai_protocol.mesh_to_inputs(obj)
+            req = ai_protocol.make_request(self.model, self.task,
+                                           inputs=inputs)
+            logger.info("调用 AI worker: %s → %s" % (worker, self.model))
+            try:
+                resp = ai_protocol.call_sync(worker, req, timeout=120)
+            except Exception as e:
+                logger.error("worker 调用失败: %s" % e)
+                return {"CANCELLED"}
+        ok = ai_protocol.is_ok(resp)
+        logger.info("AI worker 响应: ok=%s" % ok)
+        for k, v in (resp.get("outputs") or {}).items():
+            if isinstance(v, (str, int, float, bool)):
+                logger.info("  · %s = %s" % (k, v))
+        if not ok:
+            logger.warning("worker 返回失败: %s" % resp.get("error"))
+        return {"FINISHED"}
+
+
+class AFR_OT_SlicerSlice3MF(bpy.types.Operator, ExportHelper):
+    bl_idname = "afr.slicer_slice_3mf"
+    bl_label = "导出 3MF 并调用切片器"
+    filename_ext = ".3mf"
+    filter_glob: bpy.props.StringProperty(default="*.3mf", options={"HIDDEN"})
+
+    def execute(self, context):
+        try:
+            obj = _resolve_source(context)
+            if obj is None or obj.type != "MESH":
+                logger.error("没有可用的网格源对象")
+                return {"CANCELLED"}
+            res_3mf = exp_3mf.export_3mf(obj, self.filepath)
+            logger.info("已导出 3MF: %s" % res_3mf["filepath"])
+            slicer_path, slicer_name = slicer_int.find_slicer()
+            if slicer_path is None:
+                logger.warning("未发现切片器，跳过 G-code 生成")
+                return {"FINISHED"}
+            ini_path = os.path.splitext(self.filepath)[0] + ".ini"
+            ps = context.scene.afr_print
+            slicer_int.generate_ini_profile({
+                "nozzle_mm": ps.nozzle_mm,
+                "layer_height_mm": ps.layer_height_mm,
+                "material": ps.material,
+                "min_wall_thickness_mm": ps.min_wall_thickness_mm,
+                "density_g_cm3": ps.density_g_cm3,
+            }, filepath=ini_path)
+            res = slicer_int.slice_model(
+                slicer_path, self.filepath, ini_profile=ini_path, timeout=120)
+            if res.get("ok"):
+                logger.info("切片成功: %s" % res["output_path"])
+                verify = slicer_int.verify_gcode(res["output_path"])
+                logger.info("G-code: G1=%d G0=%d retract=%d layers=%d support=%d" % (
+                    verify["g1_moves"], verify["g0_travels"],
+                    verify["retractions"], verify["z_layer_changes"],
+                    verify["support_moves"]))
+            else:
+                logger.warning("切片失败: %s" % res.get("error", "未知"))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("端到端流程失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_ExportTrainingData(bpy.types.Operator, ExportHelper):
+    bl_idname = "afr.export_training_data"
+    bl_label = "导出训练数据（V0.7 manifest JSON）"
+    filename_ext = ".json"
+    filter_glob: bpy.props.StringProperty(default="*.json", options={"HIDDEN"})
+
+    def execute(self, context):
+        try:
+            res = training_export.export_training_data(
+                context.scene, self.filepath, ref_views_module=ref_views)
+            logger.info("训练数据已导出: %s" % res["filepath"])
+            logger.info("  项数=%d  字节=%d  schema=%d" % (
+                res["item_count"], res["size_bytes"], res["schema"]))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("训练数据导出失败: %s" % e)
             return {"CANCELLED"}
 
 
@@ -875,4 +980,7 @@ CLASSES = (
     AFR_OT_SlicerFind,
     AFR_OT_SlicerExportINI,
     AFR_OT_SlicerVerifyGCode,
+    AFR_OT_AIWorkerCall,
+    AFR_OT_SlicerSlice3MF,
+    AFR_OT_ExportTrainingData,
 )

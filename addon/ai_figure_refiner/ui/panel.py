@@ -121,13 +121,21 @@ class AFR_PT_Main(bpy.types.Panel):
         box.operator("afr.slicer_find", icon="VIEWZOOM")
         box.operator("afr.slicer_export_ini", icon="FILE_TEXT")
         box.operator("afr.slicer_verify_gcode", icon="CHECKMARK")
+        box.operator("afr.slicer_slice_3mf", icon="EXPORT")
 
         # --- AI Worker ------------------------------------------------------
         layout.separator()
         box = layout.box()
-        box.label(text="AI Worker (Phase 12 — 外部)", icon="NETWORK")
+        box.label(text="AI Worker (Phase 12 + V0.7 实际调用)", icon="NETWORK")
         box.operator("afr.ai_worker_check", icon="QUESTION")
         box.operator("afr.ai_stub_test", icon="PLAY")
+        box.operator("afr.ai_worker_call", icon="CONSOLE")
+
+        # --- Training data export -------------------------------------------
+        layout.separator()
+        box = layout.box()
+        box.label(text="训练数据导出 (V0.7)", icon="FILE")
+        box.operator("afr.export_training_data", icon="EXPORT")
 
         # --- Print settings --------------------------------------------------
         layout.separator()
