@@ -3,45 +3,99 @@
 All notable changes to the **AI Figure Model Refiner** are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] — 2026-08-17 — V0.7 (Training data + AI worker subprocess + Slicer e2e)
+
+### Added
+
+**V0.7 — Training data export** (`training/export.py`)
+
+- Schema v1 manifest JSON for AI training pipelines.
+- Per-mesh item with: vertices / faces / part_labels / ref_views /
+  print_settings / diagnostics / printability.
+- Forward-compatible (consumers can ignore unknown fields).
+
+**V0.7 — Slicer end-to-end**
+
+- `slicer_slice_3mf` operator: 3MF → INI → subprocess slice → G-code verify.
+- `verify_gcode` now detects both `E<0` retractions AND `;retract` comment markers.
+
+**V0.7 — AI Worker real subprocess**
+
+- `ai_worker_call` operator: actually invokes the worker via subprocess.
+- `afr_worker.py` skeleton tested end-to-end with protocol roundtrip
+  (`ok=True`, `id_match=true`, `model_match=true`).
+- User only needs to fill the `dispatch()` function with real ONNX
+  inference — no Blender-side changes needed.
+
+### Verified
+
+- `scripts/test_v0_7.py` — **PASS** (7 assertions, including real subprocess worker invocation).
+- All 7 regression test scripts pass.
+
+---
+
+## [0.6.0] — 2026-08-17 — V0.6 (Multi-object 3MF + Voronoi + Slicer CLI + Addon zip)
+
+### Added
+
+**V0.6 — Multi-object 3MF exporter** (`exporter/three_mf_multi.py`)
+
+- `export_multi_3mf`: per-mesh `<object id='N'>` resources with per-build-item translation.
+- `export_assembly_3mf`: nested `<components>` grouping.
+- `identity_transform` / `translate_transform` helpers (12-number 3MF row-major matrix).
+- De-duplicates by Blender data-block identity.
+
+**V0.6 — Voronoi lightweight lattice** (`parts_ops/voronoi.py`)
+
+- Rejection-sampling of N seed points inside the mesh (BVH ray cast for inside-test).
+- Surface-vertex assignment to nearest seed (Euclidean).
+- "Tent-pole" polyline skeleton: seed vertex → all cell boundary vertices.
+- Slicer-friendly for thin lattice printing.
+
+**V0.6 — Slicer CLI integration** (`slicer/integration.py`)
+
+- `find_slicer` / `find_all_slicers`: detects PrusaSlicer, OrcaSlicer, SuperSlicer, Slic3r, Cura.
+- `generate_ini_profile`: Slic3r/PrusaSlicer INI from our FDM settings (4 sections).
+- `slice_model`: subprocess wrapper (`--export-gcode --load <ini>`).
+- `verify_gcode`: parses G1/G0 moves, retractions, support markers, layer changes.
+
+**V0.6 — Addon packaging** (`scripts/package_addon.py`)
+
+- `build_addon_zip()`: zips `addon/ai_figure_refiner/` as installable .zip.
+- `install_addon(blender_version, user_scripts_root)`: copies to
+  `%APPDATA%/Blender Foundation/Blender/<ver>/scripts/addons/` on Windows
+  or `~/.config/blender/<ver>/scripts/addons/` on Linux/macOS.
+
+### Verified
+
+- `scripts/test_v0_6.py` — **PASS** (8 assertions).
+
+---
+
 ## [0.5.0] — 2026-08-17 — V0.5 (Hair / Fabric / Base / Merge / Orient + 3MF + AI Worker)
 
 ### Added
 
 **Phases 5-9 — Per-part operations** (`parts_ops/hair.py` + `parts_ops/generic.py`)
 
-- `extract_part(obj, label_id, new_name)` — copy majority-vertex label faces into a new mesh object.
-- `solidify_part(obj, thickness)` / `solidify_fabric(obj, thickness)` — `bmesh.ops.solidify` to add uniform wall thickness.
-- `generate_hair_curves(scene, params)` — procedural hair strands (curl/noise/taper/seed) as Blender Curves object.
-- `curves_to_mesh(curves_obj, radius, segments)` — convert hair curves to a watertight mesh via `bpy.ops.object.convert`.
-- `detect_intersections(hair_obj, body_obj)` — BVH ray-cast penetration check.
-- `detect_floating(obj, ground_tol)` — faces above the body that don't touch the ground.
-- `generate_base(scene, source_obj, radius, height)` — cylindrical base under the source bbox.
-- `merge_parts(scene, objects)` — boolean UNION of mesh objects via modifiers.
-- `auto_orient(obj)` — translate the object so its bbox min-Z = 0.
+- `extract_part`, `solidify_part`, `solidify_fabric`.
+- `generate_hair_curves` (procedural strands) + `curves_to_mesh`.
+- `detect_intersections` / `detect_floating`.
+- `generate_base`, `merge_parts` (boolean union), `auto_orient`.
 
-**Phase 11 — Self-implemented 3MF exporter** (`exporter/three_mf.py`, pure stdlib)
+**Phase 11 — Self-implemented 3MF exporter** (`exporter/three_mf.py`)
 
-- Writes `[Content_Types].xml`, `_rels/.rels`, `3D/3dmodel.model` per 3MF spec.
-- Uses `zipfile` + `xml.etree.ElementTree`. Triangulates (BEAUTY) and world-transforms the source mesh.
-- Single-object export; unit = millimeter; namespace `http://schemas.microsoft.com/3dmanufacturing/core/2015/02`.
-- Tested with `scripts/test_phases_5_to_12.py`: 24,190 verts → 50,822 triangles, 668 KB.
+- ZIP + 3 XML files per spec; pure stdlib.
 
-**Phase 12 — AI Worker protocol** (`ai_worker/protocol.py` + `ai_worker/launcher.py`)
+**Phase 12 — AI Worker protocol** (`ai_worker/`)
 
-- 5 supported models: `figure_seg` / `depth` / `normal` / `hair_dense` / `refine`.
-- JSON-over-stdio wire schema v1: `make_request` / `encode_request` / `decode_response` / `call_sync` / `mesh_to_inputs`.
-- `find_worker` discovers the worker in `addon/ai_figure_refiner/workers/` or on PATH.
-- `stub_worker_response` placeholder for offline UX.
-- `launch_or_message` diagnostic with hint for setup.
-
-### Added — UI
-
-- 13 new operators (Hair extract/solidify/generate, Fabric solidify, Generate base, Merge selected, Auto orient, Export 3MF, AI worker check, AI stub test).
-- New N-Panel sections: 头发精修 / 布料·底座·合并·定向 / 导出 / AI Worker.
+- 5 supported models, JSON-over-stdio schema v1, subprocess wrapper.
+- `find_worker` discovery + `stub_worker_response` placeholder.
+- `workers/afr_worker.py` example skeleton.
 
 ### Verified
 
-- `scripts/test_phases_5_to_12.py` — **PASS** (13 assertions covering all phases 5-12).
+- `scripts/test_phases_5_to_12.py` — **PASS** (13 assertions).
 
 ---
 
@@ -51,16 +105,15 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 **Phase 4 — Semantic part labeling** (`semantic/parts.py`)
 
-- 5 canonical parts: HAIR / HEAD / BODY / FABRIC / BASE (+ UNLABELED).
-- Per-vertex INT attribute `AFR_Part` (Blender-native storage) + per-vertex BYTE_COLOR overlay `AFR_PartColor`.
-- `heuristics_label(obj)`: first-pass geometry heuristic (BASE = bottom 12%, HAIR/HEAD = top 40% with central cross-section split, BODY = rest, FABRIC = downward-tilting faces).
-- Brush ops: `brush_apply` (Add/Overwrite/Remove) / `brush_smooth` / `brush_flood` / `brush_grow` / `brush_shrink` / `brush_undo` (per-object 30-step undo stack).
-- `vote_labels(views_labels)` — multi-view majority voter (placeholder for AI segmentation input).
-- 4 operators + N-Panel "部件语义识别" section.
+- 5 canonical parts + UNLABELED.
+- Per-vertex INT attribute + per-vertex BYTE_COLOR overlay.
+- Geometry heuristic (BASE/HEAD/HAIR/BODY/FABRIC).
+- Brush ops (Apply/Smooth/Flood/Grow/Shrink/Undo).
+- Multi-view `vote_labels`.
 
 ### Verified
 
-- `scripts/test_semantic.py` — **PASS** (6 assertions: heuristics produces BASE=63 BODY=20 HEAD=4 HAIR=1; attribute + color overlay registered; brush roundtrip; vote_labels correct).
+- `scripts/test_semantic.py` — **PASS** (6 assertions).
 
 ---
 
@@ -70,15 +123,13 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 **Phase 3 — Reference images** (`reference/views.py`)
 
-- 4 fixed view slots (FRONT/BACK/LEFT/RIGHT) on `Scene.afr_ref_views`.
-- `AFR_RefCam_<VIEW>` cameras with preset positions and bbox-aligned re-aiming.
-- Image datablock loading + camera background attachment (subtype=BACK, alpha=0.5, FIT).
-- `silhouette_edges` (analytical, camera-facing test) + `silhouette_edge_count` / `project_outline`.
-- 5 operators + N-Panel "参考图系统" section.
+- 4 fixed view slots + 4 cameras + bbox-aligned framing.
+- Image datablock loading + camera background attachment.
+- Analytical silhouette edges + project_outline.
 
 ### Verified
 
-- `scripts/test_reference.py` — **PASS** (7 assertions: 4 slots/cameras, bbox-aligned positions, 4 PNG backgrounds, silhouette edges = 6, project_outline returns 6 points, clear works).
+- `scripts/test_reference.py` — **PASS** (7 assertions).
 
 ---
 
@@ -88,16 +139,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 **Phase 2.b — Printability** (`geometry/printability.py`)
 
-- Wall thickness via BVHTree ray cast (per face -/+ normal).
-- Overhang detection (downward-facing faces excluding bed bottom).
-- Floating parts (connected components not touching ground).
+- BVHTree wall thickness (per face ±normal ray cast).
+- Overhang detection (downward faces excluding bed bottom).
+- Floating parts detection.
 - Print verdict with severity (ERROR/WARNING/INFO).
-- Pure BMesh/BVHTree; brute-force fallback when BVH unavailable.
-- `afr.run_printability` operator + `Scene.afr_print_json` + N-Panel section.
 
 ### Verified
 
-- `scripts/test_printability.py` — **PASS** (4 assertions: solid cube printable, thin cube fails validation, cube+sphere detects floating, 60° tilted cube has overhangs).
+- `scripts/test_printability.py` — **PASS** (4 assertions).
 
 ---
 
@@ -106,29 +155,32 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - **Phase 0 — Technical Feasibility Audit** (`报告.md`).
-- **Phase 1 — Plugin Framework** (`core/session.py`, `core/logging.py`, `core/pipeline.py`, `core/errors.py`, `operators.py`, `ui/panel.py`).
-- **Phase 2 (first slice) — Geometry Diagnostics & Repair** (`geometry/diagnostics.py`, `geometry/repair.py`).
-- Tooling: `scripts/audit_blender_env.py`, `scripts/deploy_addon.py`, `scripts/test_smoke.py`.
+- **Phase 1 — Plugin Framework** (`core/session.py`, `core/logging.py`,
+  `core/pipeline.py`, `core/errors.py`, `operators.py`, `ui/panel.py`).
+- **Phase 2 (first slice) — Geometry Diagnostics & Repair**
+  (`geometry/diagnostics.py`, `geometry/repair.py`).
 
 ### Verified
 
-- Headless smoke test **PASS** (8/8 assertions: cube/plane/broken-mesh diagnostics, repair, rollback, settings, logs, operator registration).
+- Headless smoke test **PASS** (8 assertions).
 
 ---
 
-## Project Status Summary
+## Project Status (V0.7)
 
-| Phase | Description | Status |
-|-------|-------------|--------|
-| 0 | Technical Feasibility Audit | ✅ Complete |
-| 1 | Plugin Framework | ✅ Complete |
-| 2 | Geometry Diagnostics + Repair | ✅ Complete |
-| 2.b | Printability Analysis | ✅ Complete |
-| 3 | Reference Image System | ✅ Complete |
-| 4 | Semantic Part Recognition | ✅ Complete |
-| 5 | Hair Refinement | ✅ Complete |
-| 6-9 | Fabric / Base / Merge / Orient | ✅ Complete |
-| 11 | 3MF Exporter (self-implemented) | ✅ Complete |
-| 12 | AI Worker Protocol (external) | ✅ Complete (worker stub) |
+| Phase / Milestone | Status |
+|------------------|--------|
+| Phase 0  — Technical Feasibility Audit | ✅ |
+| Phase 1  — Plugin Framework | ✅ |
+| Phase 2  — Mesh Diagnostics + Repair | ✅ |
+| Phase 2b — Printability Analysis | ✅ |
+| Phase 3  — Reference Image System | ✅ |
+| Phase 4  — Semantic Part Recognition | ✅ |
+| Phase 5  — Hair Refinement | ✅ |
+| Phase 6-9 — Fabric / Base / Merge / Orient | ✅ |
+| Phase 11 — 3MF Exporter (single) | ✅ |
+| Phase 12 — AI Worker Protocol | ✅ |
+| V0.6    — Multi-object 3MF + Voronoi + Slicer CLI + Addon zip | ✅ |
+| V0.7    — Training data + AI worker subprocess + Slicer e2e | ✅ |
 
-All phases **functional and headless-tested**.
+**10 commits on `main`**, 7 regression test scripts all PASS, 37 operators in N-Panel.
