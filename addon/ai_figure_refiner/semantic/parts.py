@@ -7,8 +7,9 @@ inspectable in Blender and round-trippable.
 This module provides:
   - Source-of-truth enum + per-vertex attribute management.
   - Geometry-only heuristics for a first-pass labeling (no AI required).
-  - A simple "voting" framework that future AI-segmentation outputs can
-    plug into (multi-view voting).
+  - A simple "voting" framework that AI-agent segmentation outputs (delivered
+    through the MCP interface in ``ai_figure_refiner.mcp``) plug into via
+    multi-view voting.
   - Brush operations (Add/Remove/Smooth/Flood/Grow/Shrink/Undo).
 
 Python dictionaries keyed by mesh name are the working state; results
@@ -327,11 +328,16 @@ def brush_undo(obj):
 
 
 # ---------------------------------------------------------------------------
-# Multi-view voting (placeholder for AI segmentation input)
+# Multi-view voting (merge point for AI-agent segmentation output)
 # ---------------------------------------------------------------------------
 def vote_labels(views_labels):
     """Given a list of label-arrays from N views (same vertex count),
-    return the majority label per vertex. Ties go to the first vote."""
+    return the majority label per vertex. Ties go to the first vote.
+
+    This is the integration seam for AI segmentation: an external AI agent
+    (reached through the MCP server in ``ai_figure_refiner.mcp``) can call
+    the ``label_parts`` tool on multiple reference views and the results
+    are combined here via majority vote."""
     if not views_labels:
         return []
     n = len(views_labels[0])

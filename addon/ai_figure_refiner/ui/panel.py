@@ -11,6 +11,7 @@ class AFR_PT_Main(bpy.types.Panel):
 
     def draw(self, context):
         sc = context.scene
+        ps = sc.afr_print
         layout = self.layout
 
         # --- Import / Source -------------------------------------------------
@@ -123,25 +124,23 @@ class AFR_PT_Main(bpy.types.Panel):
         box.operator("afr.slicer_verify_gcode", icon="CHECKMARK")
         box.operator("afr.slicer_slice_3mf", icon="EXPORT")
 
-        # --- AI Worker ------------------------------------------------------
+        # --- AI Agent (MCP) -------------------------------------------------
         layout.separator()
         box = layout.box()
-        box.label(text="AI Worker (Phase 12 + V0.7 实际调用)", icon="NETWORK")
-        box.operator("afr.ai_worker_check", icon="QUESTION")
-        box.operator("afr.ai_stub_test", icon="PLAY")
-        box.operator("afr.ai_worker_call", icon="CONSOLE")
+        box.label(text="AI 智能体 (MCP 接口)", icon="NETWORK")
+        box.label(text="在 Blender 内开启 MCP 兼容桥，外部 AI 智能体即可驱动本实例",
+                  icon="INFO")
+        row = box.row(align=True)
+        row.operator("afr.start_mcp_server", icon="PLAY", text="启动桥")
+        row.operator("afr.stop_mcp_server", icon="PAUSE", text="停止桥")
+        box.label(text="外部启动 MCP 服务器（AI 智能体侧）：", icon="CONSOLE")
+        box.label(text="  python scripts/run_mcp_server.py            # stdio")
+        box.label(text="  python scripts/run_mcp_server.py --transport streamable-http --port 8000")
 
-        # --- Training data export -------------------------------------------
-        layout.separator()
-        box = layout.box()
-        box.label(text="训练数据导出 (V0.7)", icon="FILE")
-        box.operator("afr.export_training_data", icon="EXPORT")
-
-        # --- Print settings --------------------------------------------------
+        # --- Print settings -------------------------------------------------
         layout.separator()
         box = layout.box()
         box.label(text="FDM 打印参数", icon="PRINT_SETTINGS")
-        ps = sc.afr_print
         box.prop(ps, "nozzle_mm")
         box.prop(ps, "layer_height_mm")
         box.prop(ps, "material")

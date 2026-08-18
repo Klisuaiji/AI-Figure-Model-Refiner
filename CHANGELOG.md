@@ -3,6 +3,67 @@
 All notable changes to the **AI Figure Model Refiner** are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] — 2026-08-18 — V0.9 (Remove local models → AI-Agent MCP interface)
+
+### Changed (paradigm shift)
+
+- **Removed all local AI models.** The plugin no longer bundles or depends on any
+  in-process AI inference (ONNX / onnxruntime / training data export). AI capability
+  is now provided by an external **AI agent** over the **MCP (Model Context Protocol)**
+  interface, Blender-MCP compatible.
+- `bl_info` version → `(0, 9, 0)`; description updated to the AI-agent / MCP paradigm.
+- Top-level `__init__.py` made safe to import **without `bpy`** (so the standalone MCP
+  server can import the `mcp` subpackage); `register()`/`unregister()` guard against a
+  missing `bpy`.
+
+### Removed
+
+- `addon/ai_figure_refiner/workers/` (incl. `afr_worker.py` + `models/*.onnx`).
+- `addon/ai_figure_refiner/ai_worker/` (JSON-over-stdio protocol + launcher).
+- `addon/ai_figure_refiner/training/` (schema-v1 training-data export).
+- 4 operators: `AFR_OT_AIWorkerCall`, `AFR_OT_AIWorkerCheck`, `AFR_OT_AIStubTest`,
+  `AFR_OT_ExportTrainingData`.
+- N-Panel "AI Worker" and "训练数据导出" boxes.
+- Root `models/` and `assets/` empty dirs.
+- `scripts/archive/*` — 50 one-off / local-model-dependent scripts moved here
+  (incl. `download_models.py`, `generate_models.py`, `test_v0_7.py`,
+  `test_phases_5_to_12.py`, all `process_hair_*` experiments).
+
+### Added
+
+- **`addon/ai_figure_refiner/mcp/`** — AI-agent MCP interface (Blender-MCP compatible):
+  - `backend.py` — Blender backend; default connects to Blender MCP socket
+    `localhost:9876`, also supports `in-process` mode.
+  - `codegen.py` — wraps tool bodies so they run inside Blender and emit an
+    `AFR_RESULT` sentinel that is parsed back into a structured result.
+  - `tools.py` — pure domain functions (no `bpy` import) covering
+    diagnose / repair-manifold / printability / semantic-label / hair / fabric / base /
+    merge / export / list-objects / scene-summary.
+  - `server.py` — MCP server (FastMCP/MCPServer) registering all tools + CLI `main()`.
+  - `bridge.py` — in-addon Blender-MCP-compatible socket bridge the agent connects to.
+  - `__init__.py` (safe import), `__main__.py` (`python -m ai_figure_refiner.mcp`).
+- **N-Panel "AI 智能体 (MCP)" box** + `AFR_OT_StartMCPServer` / `AFR_OT_StopMCPServer`
+  operators to start/stop the in-addon bridge.
+- `scripts/run_mcp_server.py` — launcher for the standalone MCP server.
+- `scripts/test_mcp.py` — validates MCP tool registration + domain logic (no Blender).
+
+### Fixed
+
+- Latent crash bug in `operators.py`: `AFR_OT_SlicerExportINI` referenced `ps`
+  before it was defined (now reads `sc.afr_print` directly). Added the missing
+  `import os` (used by `os.path` in `AFR_OT_SlicerSlice3MF`).
+
+### Verified
+
+- `python -m py_compile` on all addon modules + mcp package — OK.
+- `scripts/test_mcp.py` — **PASS** (12 MCP tools registered; tool bodies only import
+  allowed stdlib / `ai_figure_refiner.*` modules; mock-backend roundtrip returns
+  `AFR_RESULT`).
+- `semantic/parts.py` `vote_labels` retained as the merge point for AI-agent outputs
+  (dependency-free).
+
+---
+
 ## [0.8.0] — 2026-08-17 — V0.8 (Code Review + Real ONNX Inference)
 
 ### Added
@@ -212,7 +273,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## Project Status (V0.7)
+## Project Status (V0.9)
 
 | Phase / Milestone | Status |
 |------------------|--------|
@@ -225,8 +286,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 | Phase 5  — Hair Refinement | ✅ |
 | Phase 6-9 — Fabric / Base / Merge / Orient | ✅ |
 | Phase 11 — 3MF Exporter (single) | ✅ |
-| Phase 12 — AI Worker Protocol | ✅ |
+| Phase 12 — AI Worker Protocol (V0.7) → **重构为 MCP 接口 (V0.9)** | ✅ |
 | V0.6    — Multi-object 3MF + Voronoi + Slicer CLI + Addon zip | ✅ |
 | V0.7    — Training data + AI worker subprocess + Slicer e2e | ✅ |
+| V0.8    — Code review + real ONNX inference skeleton | ✅ |
+| V0.9    — Remove local models → AI-Agent MCP interface | ✅ |
 
-**10 commits on `main`**, 7 regression test scripts all PASS, 37 operators in N-Panel.
+**V0.9 on `main`** — core operators retained; AI capability now via MCP; regression
+test scripts PASS; `scripts/test_mcp.py` validates the MCP interface.

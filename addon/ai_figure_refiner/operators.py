@@ -1,4 +1,5 @@
 import json
+import os
 
 import bpy
 from bpy_extras.io_utils import ImportHelper, ExportHelper
@@ -16,9 +17,6 @@ from .parts_ops import voronoi as voronoi_ops
 from .exporter import three_mf as exp_3mf
 from .exporter import three_mf_multi as exp_3mf_multi
 from .slicer import integration as slicer_int
-from .ai_worker import launcher as ai_launcher
-from .ai_worker import protocol as ai_protocol
-from .training import export as training_export
 
 
 _PIPELINE = Pipeline()
@@ -344,47 +342,6 @@ class AFR_OT_RefClearImage(bpy.types.Operator):
             return {"CANCELLED"}
 
 
-class AFR_OT_AIWorkerCall(bpy.types.Operator):
-    bl_idname = "afr.ai_worker_call"
-    bl_label = "调用 AI Worker（subprocess 实际运行）"
-
-    model: bpy.props.EnumProperty(
-        name="模型",
-        items=[(n, n, "") for n in ai_protocol.SUPPORTED_MODELS],
-        default="figure_seg",
-    )
-    task: bpy.props.StringProperty(name="任务", default="segment")
-
-    def execute(self, context):
-        worker = ai_launcher.find_worker()
-        if worker is None:
-            logger.warning("AI worker 未找到，使用 stub 响应")
-            req = ai_protocol.make_request(self.model, self.task,
-                                           inputs={"object_name": "<none>"})
-            resp = ai_launcher.stub_worker_response(req)
-        else:
-            obj = _resolve_source(context)
-            inputs = {"object_name": obj.name if obj else "<none>"}
-            if obj is not None and obj.type == "MESH":
-                inputs = ai_protocol.mesh_to_inputs(obj)
-            req = ai_protocol.make_request(self.model, self.task,
-                                           inputs=inputs)
-            logger.info("调用 AI worker: %s → %s" % (worker, self.model))
-            try:
-                resp = ai_protocol.call_sync(worker, req, timeout=120)
-            except Exception as e:
-                logger.error("worker 调用失败: %s" % e)
-                return {"CANCELLED"}
-        ok = ai_protocol.is_ok(resp)
-        logger.info("AI worker 响应: ok=%s" % ok)
-        for k, v in (resp.get("outputs") or {}).items():
-            if isinstance(v, (str, int, float, bool)):
-                logger.info("  · %s = %s" % (k, v))
-        if not ok:
-            logger.warning("worker 返回失败: %s" % resp.get("error"))
-        return {"FINISHED"}
-
-
 class AFR_OT_SlicerSlice3MF(bpy.types.Operator, ExportHelper):
     bl_idname = "afr.slicer_slice_3mf"
     bl_label = "导出 3MF 并调用切片器"
@@ -427,26 +384,6 @@ class AFR_OT_SlicerSlice3MF(bpy.types.Operator, ExportHelper):
             return {"FINISHED"}
         except Exception as e:
             logger.error("端到端流程失败: %s" % e)
-            return {"CANCELLED"}
-
-
-class AFR_OT_ExportTrainingData(bpy.types.Operator, ExportHelper):
-    bl_idname = "afr.export_training_data"
-    bl_label = "导出训练数据（V0.7 manifest JSON）"
-    bl_options = {"REGISTER", "UNDO"}
-    filename_ext = ".json"
-    filter_glob: bpy.props.StringProperty(default="*.json", options={"HIDDEN"})
-
-    def execute(self, context):
-        try:
-            res = training_export.export_training_data(
-                context.scene, self.filepath, ref_views_module=ref_views)
-            logger.info("训练数据已导出: %s" % res["filepath"])
-            logger.info("  项数=%d  字节=%d  schema=%d" % (
-                res["item_count"], res["size_bytes"], res["schema"]))
-            return {"FINISHED"}
-        except Exception as e:
-            logger.error("训练数据导出失败: %s" % e)
             return {"CANCELLED"}
 
 
@@ -767,36 +704,6 @@ class AFR_OT_Export3MF(bpy.types.Operator, ExportHelper):
             return {"CANCELLED"}
 
 
-class AFR_OT_AIWorkerCheck(bpy.types.Operator):
-    bl_idname = "afr.ai_worker_check"
-    bl_label = "检查 AI Worker 状态"
-
-    def execute(self, context):
-        st = ai_launcher.launch_or_message()
-        if st.get("ok"):
-            logger.info("AI worker 就绪: %s" % st["worker"])
-        else:
-            logger.warning("AI worker 未找到")
-            for hint in (st.get("hint", ""),):
-                logger.warning("  · " + hint)
-        return {"FINISHED"}
-
-
-class AFR_OT_AIStubTest(bpy.types.Operator):
-    bl_idname = "afr.ai_stub_test"
-    bl_label = "测试 AI Worker 协议（Stub）"
-
-    def execute(self, context):
-        req = ai_protocol.make_request(
-            model="figure_seg", task="segment",
-            inputs={"object_name": "test", "vertices": [[0, 0, 0]],
-                    "faces": []})
-        resp = ai_launcher.stub_worker_response(req)
-        logger.info("Stub response: ok=%s stub=%s" % (
-            resp.get("ok"), resp.get("stub")))
-        return {"FINISHED"}
-
-
 class AFR_OT_SemanticApplyHeuristics(bpy.types.Operator):
     bl_idname = "afr.semantic_apply_heuristics"
     bl_label = "应用几何启发式自动标注"
@@ -952,6 +859,45 @@ class AFR_OT_RunPrintability(bpy.types.Operator):
             return {"CANCELLED"}
 
 
+class AFR_OT_StartMCPServer(bpy.types.Operator):
+    bl_idname = "afr.start_mcp_server"
+    bl_label = "启动 AI Agent (Blender MCP 桥)"
+    bl_description = "在 Blender 内开启 127.0.0.1:9876 的 MCP 兼容 socket，使外部 AI 智能体可驱动本 Blender"
+
+    def execute(self, context):
+        from .mcp import bridge
+
+        status = bridge.bridge_status()
+        if status == "running":
+            logger.info("MCP 桥已在运行 (127.0.0.1:9876)")
+            return {"FINISHED"}
+        try:
+            msg = bridge.start_bridge()
+            logger.info("MCP 桥已启动: %s" % msg)
+            logger.info("外部 AI 智能体可连接：在 WorkBuddy/终端运行 "
+                        "python scripts/run_mcp_server.py（默认 stdio）")
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("MCP 桥启动失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_StopMCPServer(bpy.types.Operator):
+    bl_idname = "afr.stop_mcp_server"
+    bl_label = "停止 AI Agent (Blender MCP 桥)"
+
+    def execute(self, context):
+        from .mcp import bridge
+
+        try:
+            msg = bridge.stop_bridge()
+            logger.info("MCP 桥已停止: %s" % msg)
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("MCP 桥停止失败: %s" % e)
+            return {"CANCELLED"}
+
+
 CLASSES = (
     AFRLogEntry,
     AFRPrintSettings,
@@ -981,15 +927,13 @@ CLASSES = (
     AFR_OT_MergeSelected,
     AFR_OT_AutoOrient,
     AFR_OT_Export3MF,
-    AFR_OT_AIWorkerCheck,
-    AFR_OT_AIStubTest,
     AFR_OT_VoronoiLattice,
     AFR_OT_ExportMulti3MF,
     AFR_OT_ExportAssembly3MF,
     AFR_OT_SlicerFind,
     AFR_OT_SlicerExportINI,
     AFR_OT_SlicerVerifyGCode,
-    AFR_OT_AIWorkerCall,
     AFR_OT_SlicerSlice3MF,
-    AFR_OT_ExportTrainingData,
+    AFR_OT_StartMCPServer,
+    AFR_OT_StopMCPServer,
 )

@@ -1,8 +1,8 @@
 # AI Figure Model Refiner (AI 手办模型精修器)
 
-> 将 AI 生成的 3D 手办模型，通过 **AI 视觉理解 + 几何算法 + 用户确认**，修复为可进入 FDM 3D 打印生产流程的模型。
+> 将 AI 生成的 3D 手办模型，通过 **AI 智能体（MCP 接口）+ 几何算法 + 用户确认**，修复为可进入 FDM 3D 打印生产流程的模型。
 
-## 项目状态（V0.7）
+## 项目状态（V0.9 — AI 智能体 / MCP 范式）
 
 | Phase | 范围 | 状态 |
 |-------|------|------|
@@ -15,11 +15,18 @@
 | 5 | 头发精修（提取 + 加厚 + 程序化生成） | ✅ |
 | 6-9 | 布料加厚 / 底座 / 合并 / 自动定向 | ✅ |
 | 11 | 3MF 导出（单 object，自研实现） | ✅ |
-| 12 | AI Worker 协议（外部 Python） | ✅ |
+| 12 | AI Worker 协议（外部 Python，**V0.9 起移除**） | ⚠️ 已重构 |
 | **V0.6** | **多对象 3MF + Voronoi 微结构 + Slicer CLI + 打包** | ✅ |
 | **V0.7** | **训练数据导出 + AI Worker 端到端 + 切片端到端** | ✅ |
+| **V0.8** | **代码审查 + 真实 ONNX 推理骨架** | ✅ |
+| **V0.9** | **移除本地模型 → 改为 AI 智能体 MCP 接口（适配 Blender MCP）** | ✅ |
 
-详见 `报告.md` 与 `CHANGELOG.md`。**37 个算子**在 N 面板，**7 个无头测试脚本全部 PASS**。
+详见 `报告.md` 与 `CHANGELOG.md`。N 面板保留核心算子；AI 能力改由外部 AI 智能体通过 **MCP 协议**驱动本插件（Blender MCP 兼容）。
+
+> **范式变更（V0.9）**：插件不再内置 / 依赖任何本地 AI 模型（ONNX / onnxruntime / training）。
+> 所有"AI 部分"（语义识别、头发/布料/底座精修、可打印性决策）现在通过
+> **MCP（Model Context Protocol）工具** 暴露给外部 AI 智能体。智能体可连接本 Blender
+> 实例（Blender MCP 兼容桥）或独立运行 MCP 服务器，从而复用同一套领域工具。
 
 ## 安装
 
@@ -55,11 +62,14 @@ blender --background --python scripts/test_smoke.py        # V0.1
 blender --background --python scripts/test_printability.py # V0.2
 blender --background --python scripts/test_reference.py    # V0.3
 blender --background --python scripts/test_semantic.py     # V0.4
-blender --background --python scripts/test_phases_5_to_12.py # V0.5
 blender --background --python scripts/test_v0_6.py         # V0.6
-blender --background --python scripts/test_v0_7.py         # V0.7
+blender --background --python scripts/test_v0_8_blender.py # V0.8 算子注册校验
 # 全部输出 "== PASS =="
 ```
+
+> 注：V0.5 / V0.7 的回归脚本依赖已移除的本地 AI Worker / 训练数据导出，已归档至
+> `scripts/archive/`，不再纳入主测试套件。新增 `scripts/test_mcp.py`（无需 Blender）
+> 校验 MCP 服务器工具注册与领域逻辑。
 
 ## 使用流程（典型）
 
@@ -74,26 +84,32 @@ blender --background --python scripts/test_v0_7.py         # V0.7
 9. **布料加厚 / 生成底座 / 合并多部件 / 自动定向** 落地。
 10. **导出 3MF** — 单 / 多 object / 装配嵌套 components（V0.6）。
 11. **调用切片器** — 端到端 3MF → INI → PrusaSlicer/OrcaSlicer → G-code 校验（V0.6/V0.7）。
-12. **AI Worker** — 真实 subprocess 调用 afr_worker.py（V0.7）；用户填 ONNX 推理即生效。
-13. **导出训练数据** — schema v1 manifest JSON（V0.7）。
+12. **AI 智能体（MCP）** — 启动面板中的 "AI 智能体 (MCP)" 桥，或在外部运行 MCP 服务器，
+    由 AI 智能体经 Blender MCP 兼容协议驱动本插件完成语义识别 / 头发·布料·底座精修 /
+    可打印性决策。
 
 ## 架构
 
 ```
 addon/ai_figure_refiner/
-├── __init__.py            # 注册、Scene 属性、版本
+├── __init__.py            # 注册、Scene 属性、版本（无 bpy 也可安全 import）
 ├── core/                  # 日志、错误、会话/快照、Pipeline
 ├── geometry/              # 诊断、修复、可打印性
 ├── ui/panel.py            # N-Panel 主面板
-├── operators.py           # 37 个算子
+├── operators.py           # 核心算子（含 MCP 桥启停算子）
 ├── reference/views.py     # 4 视图 + 相机 + 背景图
-├── semantic/parts.py      # 5 部件 + 启发式 + 画笔 + 投票
+├── semantic/parts.py      # 5 部件 + 启发式 + 画笔 + 投票（AI 输出合并点）
 ├── parts_ops/             # 头发/布料/底座/合并/定向/Voronoi
 ├── exporter/              # 3MF 单/多 object/装配
 ├── slicer/                # PrusaSlicer 集成 + G-code 验证
-├── ai_worker/             # JSON-over-stdio 协议 + worker 查找
-├── training/              # 训练数据导出 (schema v1)
-└── workers/afr_worker.py  # Worker skeleton（用户填 ONNX 推理）
+└── mcp/                   # AI 智能体 MCP 接口（适配 Blender MCP）
+    ├── backend.py         # Blender 后端：默认 socket localhost:9876（兼容 Blender MCP）
+    ├── codegen.py         # 生成 Blender 内执行代码 + 解析 AFR_RESULT 哨兵
+    ├── tools.py           # 纯领域函数（不 import bpy）
+    ├── server.py          # MCP 服务器（FastMCP/MCPServer + 工具注册 + CLI）
+    ├── bridge.py          # Blender 内 MCP 兼容 socket 桥（供智能体连接）
+    ├── __init__.py        # 安全 import（不触发 bpy / 不触发 server）
+    └── __main__.py        # `python -m ai_figure_refiner.mcp` 入口
 ```
 
 ## Blender 版本
@@ -111,26 +127,53 @@ addon/ai_figure_refiner/
 | 最低壁厚 | 0.8 mm |
 | PLA 密度 | 1.24 g/cm³ |
 
-## AI 模型安装（V0.7 已实测通过骨架）
+## AI 智能体（MCP 接口，V0.9 新增）
 
-1. 准备 Python venv：`python -m venv addon/ai_figure_refiner/workers/venv`
-2. 安装依赖：`workers/venv/bin/pip install onnxruntime numpy Pillow opencv-python`
-3. 在 `addon/ai_figure_refiner/workers/afr_worker.py` 的 `dispatch()` 里填 ONNX 推理代码（骨架已就绪）
-4. 在 Blender 中：**N 面板 → AI Worker → 调用 AI Worker** 即可
+插件不再内置任何本地 AI 模型。AI 能力通过 **MCP 协议** 暴露给外部 AI 智能体，
+智能体即可像"调用工具"一样驱动本 Blender 实例完成精修。
 
-协议往返已实测：subprocess 调骨架 → ok=True / id_match / model_match。
+### 两种接入方式
+
+**方式 1 — 在 Blender 内启动桥（推荐，Blender MCP 兼容）**
+
+1. Blender 中：**N 面板 → AI 智能体 (MCP) → 启动桥**（默认 `localhost:9876`）。
+2. 外部 AI 智能体（如支持 Blender MCP 的客户端）连接该端口，复用 Blender MCP 协议。
+
+**方式 2 — 独立运行 MCP 服务器（无头，供任意 MCP 客户端）**
+
+```bash
+# 需安装 mcp SDK: pip install mcp
+python scripts/run_mcp_server.py --host 127.0.0.1 --port 9877
+# 或: python -m ai_figure_refiner.mcp  (作为 MCP stdio 服务器)
+```
+
+服务器自动把每个工具包装为：生成在 Blender 内执行的代码 → 经后端执行 →
+解析 `AFR_RESULT` 哨兵返回结构化结果。`backend` 默认指向 Blender MCP socket，
+亦可设为 `in-process`（在同一 Blender 进程内运行，便于测试）。
+
+### 暴露的工具（节选）
+
+`afr_diagnose` / `afr_repair_manifold` / `afr_printability` / `afr_semantic_label` /
+`afr_optimize_hair` / `afr_optimize_fabric` / `afr_optimize_base` / `afr_merge_parts` /
+`afr_export_3mf` / `afr_list_objects` / `afr_get_scene_summary`
+
+### 依赖
+
+- 仅 MCP 服务器运行时需要 `mcp` SDK（`pip install mcp`）。
+- Blender 端桥纯用标准库（`socket` / `json` / `threading`），**零第三方依赖**。
 
 ## 已知限制
 
 - Blender 5.2 **无原生 3MF 导入** — V0.6 自研导出（单/多/装配）；导入可在 V1.0 加。
-- Blender Python **缺 onnxruntime / opencv / Pillow / trimesh / open3d** — 走外部 Python worker（V0.7 协议已通）。
-- **无训练数据** — V0.7 提供 schema v1 manifest 导出工具；用户自行采集/标注。
+- **AI 推理移至外部智能体** — V0.9 起插件不再内置任何本地模型；
+  AI 语义识别 / 精修策略由接入的 AI 智能体（MCP 客户端）自带环境完成。
 - **Boolean Union 在极端几何上可能失败** — 通用解算器限制；建议先修水密。
 - **Voronoi 微结构**：当前是 tent-pole 骨架（线段），需要切片器按线宽挤出成实体管。
 
 ## 开源依赖
 
-**V0.7 零第三方代码依赖** — 全部用 Blender 原生 API + Python stdlib 实现。
+- **插件本体（Blender 端）零第三方代码依赖** — 全部用 Blender 原生 API + Python stdlib。
+- **MCP 服务器运行时** 需 `mcp` SDK（`pip install mcp`），但这是外部进程，不影响 Blender 端。
 
 ## License
 
@@ -140,5 +183,5 @@ addon/ai_figure_refiner/
 
 - 仓库：`https://github.com/Klisuaiji/AI-Figure-Model-Refiner`
 - 分支：`main`
-- 提交：10 commits（V0.1-V0.7 完整链路），HEAD = `788ea65`
-- 7 个回归测试脚本全部 PASS
+- 版本：V0.9（移除本地模型，改为 AI 智能体 MCP 接口）
+- 回归测试脚本全部 PASS；`scripts/test_mcp.py` 校验 MCP 工具注册与逻辑。
