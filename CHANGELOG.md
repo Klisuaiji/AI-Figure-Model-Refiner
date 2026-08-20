@@ -3,6 +3,56 @@
 All notable changes to the **AI Figure Model Refiner** are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.13.1] — 2026-08-20 — V0.13.1 (hotfix: connector logger crash)
+
+### Fixed
+
+- **`operators.py` 3-line crash on `create_connector` / `carve_socket`** — the
+  connector operators (V0.11) used `logger.info("...%s...", a, b)` with positional
+  args, but the project `core.logging.Logger` is single-string-only. Symptom:
+  the connector mesh **was actually created** but the operator raised
+  `TypeError: Logger.info() takes 2 positional arguments but 5 were given`.
+  Fixed by re-formatting to pre-built strings (f-string / `%`).
+
+### Notes
+
+- Discovered by user via blender-mcp socket (`127.0.0.1:9876`) live debugging
+  on a 9-part figure scene. Also confirmed that **`merge_selected` is not a
+  bug** in the GUI — it just requires the selection context which `bpy.ops`
+  does not auto-transmit in the MCP headless path. Workaround for MCP:
+  wrap the call in `bpy.context.temp_override(selected_objects=[...])`.
+- Reminder: the plugin is loaded from Blender's **user addons** copy
+  (`AppData\Roaming/Blender/5.2/scripts/addons/ai_figure_refiner/`), not the
+  repo source. After editing repo .py, also `cp` into user addons and clear
+  `__pycache__/`.
+
+## [0.13.0] — 2026-08-20 — V0.13 (Reference images → multimodal agent + GPL-3.0)
+
+### Changed
+
+- **License MIT → GPL-3.0-or-later** — `LICENSE` replaced with full GPL-3.0
+  text; all 34 addon `.py` source files now carry an SPDX header. Rationale:
+  enable GPL-compliant interop with other GPL projects (e.g. SnapSplit).
+  README / wiki / `报告.md` updated.
+- **4-quadrant preview area in the main panel is now a reference-image
+  uploader** (front/back/left/right). The front photo is **mandatory**.
+  These images are exposed to the multimodal AI agent for vision-assisted
+  part labelling.
+
+### Added
+
+- **MCP** (`mcp/tools.py` + `mcp/server.py`):
+  - `get_reference_images` — returns the 4 slot paths + loaded status +
+    `front_present` (used by the multimodal agent to read the images).
+  - `set_part_labels` — write a per-vertex label array (UNLABELED/HAIR/HEAD/
+    BODY/FABRIC/BASE) to an object, for the agent to commit vision results.
+  - `label_parts(method='vision'/'multimodal')` — when no FRONT image is
+    uploaded, returns an error requiring the front photo; otherwise runs
+    heuristics + reports the front image path. Total MCP tools: **16**.
+- Panel (`ui/panel.py`): each of the 4 reference slots shows status (loaded
+  filename / "未上传" / "正面（必须）" with an ERROR icon when missing) +
+  Upload / Clear / Focus buttons.
+
 ## [0.12.0] — 2026-08-20 — V0.12 (Toolset UI: fixed workflow -> on-demand tools)
 
 ### Changed

@@ -1,3 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Klisuaiji (AI Figure Model Refiner)
+# This file is part of the AI Figure Model Refiner (AFR) addon.
+# AFR is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your
+# option) any later version.
+#
+# AFR is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
+# for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with AFR. If not, see <https://www.gnu.org/licenses/>.
 import json
 import os
 
@@ -1023,8 +1038,9 @@ class AFR_OT_CreateConnector(bpy.types.Operator):
                 logger.error("两部件连接件生成失败: %s" % e)
                 return {"CANCELLED"}
             pa, pb = res.get("parented_to", (None, None))
-            logger.info("连接件(%s) 已布于 %s<->%s 之间（非破坏：凸归 %s / 凹归 %s）",
-                        self.kind, obj_a.name, obj_b.name, pa, pb)
+            logger.info(
+                "连接件(%s) 已布于 %s<->%s 之间（非破坏：凸归 %s / 凹归 %s）"
+                % (self.kind, obj_a.name, obj_b.name, pa, pb))
             return {"FINISHED"}
         # default: standalone joint pair at the 3D cursor (semi-auto, no solve)
         pos = context.scene.cursor.location
@@ -1042,10 +1058,11 @@ class AFR_OT_CreateConnector(bpy.types.Operator):
             return {"CANCELLED"}
         male = res.get("male")
         sock = res.get("female_socket")
-        logger.info("连接件(%s) 已生成 @游标：凸(peg)=%s 凹(套筒)=%s（零布尔）",
-                    self.kind,
-                    male.name if male else None,
-                    sock.name if sock else None)
+        logger.info(
+            "连接件(%s) 已生成 @游标：凸(peg)=%s 凹(套筒)=%s（零布尔）"
+            % (self.kind,
+               male.name if male else None,
+               sock.name if sock else None))
         return {"FINISHED"}
 
 
@@ -1072,9 +1089,9 @@ class AFR_OT_CarveSocket(bpy.types.Operator):
         if res.get("error"):
             logger.error(res["error"])
             return {"CANCELLED"}
-        logger.info("挖孔完成：target=%s cutter=%s applied=%s ok=%s",
-                    res.get("target"), res.get("cutter"),
-                    res.get("applied"), res.get("ok"))
+        logger.info("挖孔完成：target=%s cutter=%s applied=%s ok=%s" % (
+            res.get("target"), res.get("cutter"),
+            res.get("applied"), res.get("ok")))
         return {"FINISHED"}
 
 
