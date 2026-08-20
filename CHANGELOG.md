@@ -3,6 +3,42 @@
 All notable changes to the **AI Figure Model Refiner** are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.10.0] — 2026-08-20 — V0.10 (Connector / joint generation for assembly)
+
+### Added (Phase 10)
+
+- **`parts_ops/connectors.py`** — generates the convex/concave assembly joints a
+  printed figure needs:
+  - `round` : cylindrical **peg (male)** + matching **hole cutter (female)** — the
+    universal joint for assembling split body / limb / head parts.
+  - `ball`  : **ball (male)** + matching **socket bowl cutter (female)** — for
+    articulated figures (head / shoulder / hip rotation). Opening ratio < 1 gives a
+    snap-fit that retains the ball.
+  - `dovetail` : trapezoidal **tab (male)** + matching **slot cutter (female)** —
+    strong flat-interface splits.
+  - `create_connector(...)` unified factory; `carve_socket(...)` Boolean-DIFFERENCE
+    carve (guarded); `add_connector_between(...)` auto-places a connector at the
+    midpoint between two parts and carves into the receiving part.
+  - `preset_from_nozzle(...)` FDM tolerance presets (0.2 / 0.4 / 0.6 mm nozzles).
+  - All joints are built as standalone solids with **built-in FDM clearance**
+    (female side enlarged by `2 × clearance`); no fragile boolean is used to *build*
+    a connector.
+- **Operators** `AFR_OT_CreateConnector` (kind / diameter / depth / length / tolerance
+  / nozzle / flange / chamfer / opening-ratio; place at cursor or between two parts)
+  and `AFR_OT_CarveSocket` (active = target, selected = cutter).
+- **N-Panel** "连接/拼接部件 (凹凸, Phase 10)" box.
+- **MCP tools** `create_connector` and `carve_socket` (AI agent can now generate &
+  carve joints over Blender MCP).
+- **`scripts/test_connectors.py`** — headless Blender test (all 3 kinds manifold,
+  both carves, between-part placement).
+
+### Notes
+
+- Implementation re-derived from the public techniques of JointForge, Easy-Print and
+  fdm_joints, written from scratch under the project's MIT license (no GPL code
+  vendored). Techniques referenced: male/female keyed joints, FDM clearance,
+  nozzle-based tolerance, articulated ball joints.
+
 ## [0.9.0] — 2026-08-18 — V0.9 (Remove local models → AI-Agent MCP interface)
 
 ### Changed (paradigm shift)

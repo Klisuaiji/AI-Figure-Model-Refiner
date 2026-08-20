@@ -17,6 +17,8 @@ Blender 内执行对应领域逻辑，返回结构化 JSON 结果（经 `AFR_RES
 | `afr_auto_orient` | `object_names` | 自动定向（以最小包围盒底面落地）。 |
 | `afr_export_3mf` | `object_names`, `filepath` | 导出 3MF（单 / 多 object / 装配嵌套 components）。 |
 | `afr_run_blender_code` | `code` | 在 Blender 内执行任意 Python 代码并返回 `AFR_RESULT` 哨兵结果。 |
+| `create_connector` | `kind`(round/ball/dovetail), `position`, `direction`, `diameter`, `depth`, `length`, `clearance`, `nozzle_mm`, `with_flange`, `chamfer`, `opening_ratio`, `name` | 生成凹凸连接件（圆柱/球窝/燕尾），返回 male 与 female_cutter 物体名。 |
+| `carve_socket` | `target_name`, `cutter_name`, `apply` | 用凹模（female_cutter）对目标网格做 Boolean DIFFERENCE 挖孔（apply=True 烘焙几何）。 |
 
 ## 执行模型
 

@@ -211,3 +211,47 @@ def export_3mf(backend: BlenderBackend, filepath: str,
         "                  'triangles': res.get('triangles')}\n"
     ) % (object_name, filepath)
     return _run(backend, body)
+
+
+# ---------------------------------------------------------------------------
+# Connectors (convex/concave assembly joints)
+# ---------------------------------------------------------------------------
+def create_connector(backend: BlenderBackend, kind: str = "round",
+                     position=(0.0, 0.0, 0.0), direction=(0.0, 0.0, 1.0),
+                     diameter: float = 5.0, depth: float = 4.0,
+                     length: float = 4.0, clearance: float = 0.2,
+                     nozzle_mm: float = 0.4, with_flange: bool = False,
+                     chamfer: bool = True, opening_ratio: float = 0.7,
+                     name: str = "AFR_Connector") -> dict:
+    body = (
+        "from ai_figure_refiner.parts_ops import connectors as connector_ops\n"
+        "res = connector_ops.create_connector(\n"
+        "    bpy.context.scene, kind=%r, position=%r, direction=%r,\n"
+        "    diameter=%r, depth=%r, length=%r, clearance=%r,\n"
+        "    nozzle_mm=%r, with_flange=%r, chamfer=%r,\n"
+        "    opening_ratio=%r, name=%r)\n"
+        "AFR_RESULT = {\n"
+        "    'kind': res['kind'],\n"
+        "    'male': res['male'].name if res.get('male') else None,\n"
+        "    'female_cutter': res['female_cutter'].name\n"
+        "                    if res.get('female_cutter') else None,\n"
+        "    'params': res['params'],\n"
+        "}\n"
+    ) % (kind, tuple(position), tuple(direction), diameter, depth, length,
+         clearance, nozzle_mm, with_flange, chamfer, opening_ratio, name)
+    return _run(backend, body)
+
+
+def carve_socket(backend: BlenderBackend, target_name: str,
+                 cutter_name: str, apply: bool = True) -> dict:
+    body = (
+        "from ai_figure_refiner.parts_ops import connectors as connector_ops\n"
+        "tgt = bpy.data.objects.get(%r)\n"
+        "cut = bpy.data.objects.get(%r)\n"
+        "if tgt is None or cut is None:\n"
+        "    AFR_RESULT = {'error': 'target or cutter not found'}\n"
+        "else:\n"
+        "    AFR_RESULT = connector_ops.carve_socket(\n"
+        "        bpy.context.scene, tgt, cut, apply=%r)\n"
+    ) % (target_name, cutter_name, apply)
+    return _run(backend, body)

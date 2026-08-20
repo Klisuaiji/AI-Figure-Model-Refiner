@@ -26,7 +26,7 @@ from . import tools
 
 mcp = MCPServer(
     name="ai-figure-refiner",
-    version="0.9.0",
+    version="0.10.0",
     description=(
         "AI Figure Model Refiner — drives Blender to diagnose, repair, "
         "printability-check, semantically label, refine (hair/fabric/base), "
@@ -109,6 +109,31 @@ async def t_export_3mf(filepath: str, object_name: str | None = None) -> dict:
 @mcp.tool(name="run_blender_code", description="Run arbitrary Blender Python. The code must assign a dict to AFR_RESULT. Use for advanced/composed workflows the dedicated tools do not cover.")
 async def t_run_blender_code(code: str) -> dict:
     return tools.run_blender_code(get_default_backend(), code)
+
+
+@mcp.tool(name="create_connector", description="Generate an assembly connector set for a 3D-printed figure: 'round' (peg+hole), 'ball' (ball+socket), or 'dovetail' (tab+slot). Returns the male and female_cutter object names. Female side is a cutter mesh to carve into the receiving part.")
+async def t_create_connector(kind: str = "round",
+                            position=(0.0, 0.0, 0.0),
+                            direction=(0.0, 0.0, 1.0),
+                            diameter: float = 5.0, depth: float = 4.0,
+                            length: float = 4.0, clearance: float = 0.2,
+                            nozzle_mm: float = 0.4,
+                            with_flange: bool = False,
+                            chamfer: bool = True,
+                            opening_ratio: float = 0.7,
+                            name: str = "AFR_Connector") -> dict:
+    return tools.create_connector(
+        get_default_backend(), kind=kind, position=position,
+        direction=direction, diameter=diameter, depth=depth, length=length,
+        clearance=clearance, nozzle_mm=nozzle_mm, with_flange=with_flange,
+        chamfer=chamfer, opening_ratio=opening_ratio, name=name)
+
+
+@mcp.tool(name="carve_socket", description="Carve the female cutter mesh into the target mesh object via Boolean DIFFERENCE (apply=True bakes geometry). Used after create_connector to cut the hole/socket/slot.")
+async def t_carve_socket(target_name: str, cutter_name: str,
+                        apply: bool = True) -> dict:
+    return tools.carve_socket(get_default_backend(), target_name,
+                             cutter_name, apply=apply)
 
 
 def main() -> None:

@@ -1,7 +1,7 @@
 bl_info = {
     "name": "AI Figure Model Refiner (AI 手办模型精修器)",
     "author": "Klisuaiji",
-    "version": (0, 9, 0),
+    "version": (0, 10, 0),
     "blender": (5, 2, 0),
     "location": "View3D > Sidebar > AI Figure Refiner",
     "description": "将 AI 生成的 3D 手办修复为 FDM 3D 打印可生产模型；AI 推理通过外部 AI 智能体（MCP 接口）驱动 Blender。",
@@ -39,7 +39,7 @@ def register():
     bpy.types.Scene.afr_ref_views = bpy.props.CollectionProperty(type=AFRRefView)
     _ref_views.ensure_ref_state(bpy.context.scene) if hasattr(bpy.context, "scene") and bpy.context.scene else None
     from .core.logging import logger
-    logger.info("AI Figure Refiner v0.9（AI 智能体/MCP 范式）已注册（Blender 5.2 LTS）")
+    logger.info("AI Figure Refiner v0.10（AI 智能体/MCP 范式 + 凹凸连接件）已注册（Blender 5.2 LTS）")
 
 
 def unregister():

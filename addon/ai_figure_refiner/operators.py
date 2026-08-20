@@ -14,6 +14,7 @@ from .semantic import parts as sem_parts
 from .parts_ops import hair as hair_ops
 from .parts_ops import generic as generic_ops
 from .parts_ops import voronoi as voronoi_ops
+from .parts_ops import connectors as connector_ops
 from .exporter import three_mf as exp_3mf
 from .exporter import three_mf_multi as exp_3mf_multi
 from .slicer import integration as slicer_int
@@ -898,6 +899,109 @@ class AFR_OT_StopMCPServer(bpy.types.Operator):
             return {"CANCELLED"}
 
 
+class AFR_OT_CreateConnector(bpy.types.Operator):
+    bl_idname = "afr.create_connector"
+    bl_label = "生成连接/拼接部件 (凹凸)"
+    bl_description = "生成手办装配用的凹凸连接件：圆柱(peg/hole)、球窝(ball/socket)、燕尾(tab/slot)"
+    bl_options = {"REGISTER", "UNDO"}
+
+    kind: bpy.props.EnumProperty(
+        name="类型",
+        items=[
+            (connector_ops.KIND_ROUND, "圆柱 凹凸", "Peg + Hole"),
+            (connector_ops.KIND_BALL, "球窝", "Ball + Socket"),
+            (connector_ops.KIND_DOVETAIL, "燕尾 凹凸", "Tab + Slot"),
+        ],
+        default=connector_ops.KIND_ROUND,
+    )
+    place: bpy.props.EnumProperty(
+        name="布点",
+        items=[
+            ("cursor", "3D 游标", "在 3D 游标处生成独立连接件对"),
+            ("between", "两部件之间", "在两选中网格中心连线中点处生成并挖孔"),
+        ],
+        default="cursor",
+    )
+    diameter: bpy.props.FloatProperty(name="直径/宽 (mm)", default=5.0, min=1.0, max=40.0)
+    depth: bpy.props.FloatProperty(name="孔深/槽深 (mm)", default=4.0, min=0.5, max=40.0)
+    length: bpy.props.FloatProperty(name="凸柱长 (mm)", default=4.0, min=0.5, max=40.0)
+    clearance: bpy.props.FloatProperty(name="公差 (mm)", default=0.2, min=0.0, max=2.0)
+    nozzle_mm: bpy.props.FloatProperty(name="喷嘴 (mm)", default=0.4, min=0.1, max=2.0)
+    with_flange: bpy.props.BoolProperty(name="加法兰盘", default=False)
+    chamfer: bpy.props.BoolProperty(name="凸柱倒角", default=True)
+    opening_ratio: bpy.props.FloatProperty(name="球窝开口比", default=0.7, min=0.3, max=0.95)
+    name: bpy.props.StringProperty(name="名称前缀", default="AFR_Connector")
+
+    def execute(self, context):
+        sc = context.scene
+        sel = [o for o in context.selected_objects if o.type == "MESH"]
+        if self.place == "between" and len(sel) >= 2:
+            obj_a, obj_b = sel[0], sel[1]
+            try:
+                res = connector_ops.add_connector_between(
+                    sc, obj_a, obj_b, kind=self.kind,
+                    diameter=self.diameter, depth=self.depth, length=self.length,
+                    clearance=self.clearance, nozzle_mm=self.nozzle_mm,
+                    with_flange=self.with_flange, chamfer=self.chamfer,
+                    opening_ratio=self.opening_ratio, name=self.name,
+                )
+            except Exception as e:
+                logger.error("两部件连接件生成失败: %s" % e)
+                return {"CANCELLED"}
+            carved = res.get("carved") or {}
+            logger.info("连接件(%s) 已布于 %s<->%s 之间；挖孔=%s",
+                        self.kind, obj_a.name, obj_b.name, carved.get("ok"))
+            return {"FINISHED"}
+        # default: standalone pair at the 3D cursor
+        pos = context.scene.cursor.location
+        try:
+            res = connector_ops.create_connector(
+                sc, kind=self.kind, position=tuple(pos),
+                direction=(0.0, 0.0, 1.0), diameter=self.diameter,
+                depth=self.depth, length=self.length, clearance=self.clearance,
+                nozzle_mm=self.nozzle_mm, with_flange=self.with_flange,
+                chamfer=self.chamfer, opening_ratio=self.opening_ratio,
+                name=self.name,
+            )
+        except Exception as e:
+            logger.error("连接件生成失败: %s" % e)
+            return {"CANCELLED"}
+        logger.info("连接件(%s) 已生成：male=%s female=%s",
+                    self.kind,
+                    res["male"].name if res.get("male") else None,
+                    res["female_cutter"].name if res.get("female_cutter") else None)
+        return {"FINISHED"}
+
+
+class AFR_OT_CarveSocket(bpy.types.Operator):
+    bl_idname = "afr.carve_socket"
+    bl_label = "用凹模挖孔 (Boolean)"
+    bl_description = "将选中的凹模(cutter)通过布尔差集挖入活动网格对象"
+    bl_options = {"REGISTER", "UNDO"}
+
+    apply: bpy.props.BoolProperty(name="立即应用", default=True)
+
+    def execute(self, context):
+        target = context.active_object
+        cutter = next((o for o in context.selected_objects
+                       if o != target and o.type == "MESH"), None)
+        if target is None or target.type != "MESH":
+            logger.error("请先选中一个 MESH 目标（活动对象）")
+            return {"CANCELLED"}
+        if cutter is None:
+            logger.error("请再选中一个 MESH 凹模(cutter)作为挖孔工具")
+            return {"CANCELLED"}
+        res = connector_ops.carve_socket(context.scene, target, cutter,
+                                         apply=self.apply)
+        if res.get("error"):
+            logger.error(res["error"])
+            return {"CANCELLED"}
+        logger.info("挖孔完成：target=%s cutter=%s applied=%s ok=%s",
+                    res.get("target"), res.get("cutter"),
+                    res.get("applied"), res.get("ok"))
+        return {"FINISHED"}
+
+
 CLASSES = (
     AFRLogEntry,
     AFRPrintSettings,
@@ -936,4 +1040,6 @@ CLASSES = (
     AFR_OT_SlicerSlice3MF,
     AFR_OT_StartMCPServer,
     AFR_OT_StopMCPServer,
+    AFR_OT_CreateConnector,
+    AFR_OT_CarveSocket,
 )

@@ -9,7 +9,7 @@ addon/ai_figure_refiner/
 ├── operators.py           # 核心算子（含 MCP 桥启停算子）
 ├── reference/views.py     # 4 视图 + 相机 + 背景图
 ├── semantic/parts.py      # 5 部件 + 启发式 + 画笔 + 投票（AI 输出合并点）
-├── parts_ops/             # 头发/布料/底座/合并/定向/Voronoi
+├── parts_ops/             # 头发/布料/底座/合并/定向/Voronoi/**凹凸连接件(connectors)**
 ├── exporter/              # 3MF 单/多 object/装配
 ├── slicer/                # PrusaSlicer 集成 + G-code 验证
 └── mcp/                   # AI 智能体 MCP 接口（适配 Blender MCP）
