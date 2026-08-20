@@ -990,9 +990,14 @@ class AFR_OT_CreateConnector(bpy.types.Operator):
                                          min=0.4, max=10.0)
 
     def invoke(self, context, event):
-        return context.window_manager.invoke_props_dialog(self)
+        # V0.14 UX: point-and-click — pressing the button generates immediately
+        # with the panel-supplied args. (Big props dialog was confusing — users
+        # saw the dialog, hit Cancel, and assumed nothing happened.)
+        # Advanced: pressing F6 in the redo panel exposes all 11 properties.
+        return self.execute(context)
 
     def draw(self, context):
+        # Only shown in the redo panel (F6) — not in the initial dialog.
         layout = self.layout
         layout.prop(self, "kind")
         layout.prop(self, "axis")

@@ -1,8 +1,24 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Klisuaiji (AI Figure Model Refiner)
+# This file is part of the AI Figure Model Refiner (AFR) addon.
+# AFR is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your
+# option) any later version.
+#
+# AFR is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
+# for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with AFR. If not, see <https://www.gnu.org/licenses/>.
 """V0.12 — Toolset N-Panel UI.
 
 The fixed-step workflow is replaced by an on-demand **toolset**: one main
-panel ("AI 手办模型工具") with a 4-quadrant preview area (前/后/左/右) and
-independent, collapsible tool sub-panels the user runs as needed:
+panel ("AI 手办模型工具") with a 4-quadrant reference-image area (前/后/左/右,
+the front photo is mandatory) and independent, collapsible tool sub-panels
+the user runs as needed:
 
   * 拆分部件  — semantic labeling + split into per-part objects
   * 头发修正  — extract / solidify / procedural hair
@@ -13,10 +29,24 @@ independent, collapsible tool sub-panels the user runs as needed:
   * 连接/拼接部件 (V0.11) — solver-free convex/concave joints
   * AI 智能体 (MCP) — Blender MCP bridge for external agents
 
-Sub-panels start collapsed (``DEFAULT_CLOSED``) so the panel reads as a clean
-tool list — expand only what you need.
+Sub-panels are unfolded by default so the entire toolset is immediately
+visible (collapse whatever you don't need with the triangle on the left).
+
+V0.13: the 4-quadrant area is now a **reference-image uploader** for the
+multimodal AI agent (front photo mandatory) that assists part labeling.
+
+V0.14 (hotfix 2026-08-20):
+  * sub-panels: removed DEFAULT_CLOSED — all 8 tools visible by default
+  * main panel: bigger callouts for "set source / move 3D cursor" workflows
+  * connector panel: inline hint about cursor placement + axis dropdown
 """
+import os
+
 import bpy
+
+from ..reference import views as ref_views
+
+_CN_VIEW = {"FRONT": "前", "BACK": "后", "LEFT": "左", "RIGHT": "右"}
 
 
 class AFR_PT_Main(bpy.types.Panel):
@@ -30,8 +60,15 @@ class AFR_PT_Main(bpy.types.Panel):
         layout = self.layout
 
         box = layout.box()
-        box.label(text="工具集模式：按需执行，不再按固定流程", icon="TOOL_SETTINGS")
-        box.label(text="1) 导入/选中手办  2) 展开所需工具执行", icon="INFO")
+        box.label(text="⚡ 工具集模式：按需执行，不再按固定流程", icon="TOOL_SETTINGS")
+        box.label(text="（下方 8 个子面板默认全部展开，按需折叠即可）", icon="INFO")
+        box.separator()
+        box.label(text="1) 上传 正面参考图（必传，给智能体辅助标注用）",
+                  icon="IMAGE")
+        box.label(text="2) 点 “使用当前选中” 设源对象（不设的话大部分工具不工作）",
+                  icon="HAND")
+        box.label(text="3) 展开工具执行；连接键/挖孔前 先把 3D 游标点到接缝位置",
+                  icon="CURSOR")
 
         # --- Source object ------------------------------------------------
         box = layout.box()
@@ -40,19 +77,44 @@ class AFR_PT_Main(bpy.types.Panel):
         box.operator("afr.use_selected", icon="HAND")
         box.prop(sc, "afr_source", text="源对象")
 
-        # --- 4-quadrant preview (前/后/左/右) ------------------------------
+        # --- 4-quadrant reference images (for the multimodal agent) --------
         box = layout.box()
-        box.label(text="预览（四视图：前/后/左/右）", icon="IMAGE")
-        box.label(text="点击切换到参考视角；Ctrl+Alt+Q 开启 Quad View", icon="INFO")
-        row = box.row(align=True)
-        row.operator("afr.ref_focus_view", text="前 Front").view_name = "FRONT"
-        row.operator("afr.ref_focus_view", text="后 Back").view_name = "BACK"
-        row = box.row(align=True)
-        row.operator("afr.ref_focus_view", text="左 Left").view_name = "LEFT"
-        row.operator("afr.ref_focus_view", text="右 Right").view_name = "RIGHT"
+        box.label(text="参考图（供多模态 AI 智能体辅助部件标记）", icon="IMAGE")
+        box.label(text="正面（前）必须上传；四视图参考图可帮助智能体标注部件",
+                  icon="INFO")
+        ref_views.ensure_ref_state(sc)
+        for vname in ("FRONT", "BACK", "LEFT", "RIGHT"):
+            slot = ref_views.get_view_slot(sc, vname)
+            loaded = bool(slot is not None and slot.image_path)
+            row = box.row(align=True)
+            if vname == "FRONT":
+                icon = "CHECKMARK" if loaded else "ERROR"
+                tag = "正面（必须）"
+            else:
+                icon = "CHECKMARK" if loaded else "INFO"
+                tag = "未上传"
+            row.label(text=_CN_VIEW[vname], icon=icon)
+            if loaded:
+                row.label(text=os.path.basename(slot.image_path)[:18])
+            else:
+                row.label(text=tag)
+            op = row.operator("afr.ref_load_image", text="上传", icon="FILE_IMAGE")
+            op.view_name = vname
+            op = row.operator("afr.ref_clear_image", text="", icon="X")
+            op.view_name = vname
+            op = row.operator("afr.ref_focus_view", text="看", icon="HAND")
+            op.view_name = vname
         row = box.row(align=True)
         row.operator("afr.ref_create_cameras", text="创建参考相机", icon="CAMERA_DATA")
         row.operator("afr.ref_align_to_bbox", text="对齐包围盒", icon="FULLSCREEN_ENTER")
+        box.label(text="Ctrl+Alt+Q 开启 Quad View（四视图）", icon="INFO")
+
+        # --- 3D cursor readout (V0.14: makes cursor placement obvious) ------
+        box = layout.box()
+        box.label(text="3D 游标位置（连接键/挖孔都基于此）", icon="CURSOR")
+        cursor = context.scene.cursor.location
+        box.label(text="X %.3f   Y %.3f   Z %.3f" % (cursor.x, cursor.y, cursor.z),
+                  icon="EMPTY_AXIS")
 
 
 class AFR_PT_Tool_Split(bpy.types.Panel):
@@ -61,7 +123,7 @@ class AFR_PT_Tool_Split(bpy.types.Panel):
     bl_category = "AI Figure Refiner"
     bl_parent_id = "AFR_PT_Main"
     bl_label = "拆分部件"
-    bl_options = {"DEFAULT_CLOSED"}
+    bl_options = set()   # V0.14: unfold all sub-panels by default
 
     def draw(self, context):
         layout = self.layout
@@ -82,12 +144,19 @@ class AFR_PT_Tool_Hair(bpy.types.Panel):
     bl_category = "AI Figure Refiner"
     bl_parent_id = "AFR_PT_Main"
     bl_label = "头发修正"
-    bl_options = {"DEFAULT_CLOSED"}
+    bl_options = set()   # V0.14: unfold all sub-panels by default
 
     def draw(self, context):
+        sc = context.scene
+        src = sc.afr_source
+        has_src = bool(src) and src in bpy.data.objects
         ps = context.scene.afr_print
         layout = self.layout
         layout.label(text="提取 / 加厚 / 程序化生成", icon="HAIR")
+        if not has_src:
+            layout.label(text="⚠ 请先在主面板点 “使用当前选中”", icon="ERROR")
+        if has_src and "HAIR" not in bpy.data.objects[src].data.attributes:
+            layout.label(text="⚠ 请先到“拆分部件”面板点 Auto-Label", icon="ERROR")
         layout.operator("afr.hair_extract", icon="MESH_DATA")
         op = layout.operator("afr.hair_solidify", icon="MOD_SOLIDIFY")
         op.thickness = ps.min_wall_thickness_mm
@@ -100,12 +169,17 @@ class AFR_PT_Tool_Fabric(bpy.types.Panel):
     bl_category = "AI Figure Refiner"
     bl_parent_id = "AFR_PT_Main"
     bl_label = "布料修正"
-    bl_options = {"DEFAULT_CLOSED"}
+    bl_options = set()   # V0.14: unfold all sub-panels by default
 
     def draw(self, context):
+        sc = context.scene
+        src = sc.afr_source
+        has_src = bool(src) and src in bpy.data.objects
         ps = context.scene.afr_print
         layout = self.layout
         layout.label(text="布料加厚（Solidify）", icon="MOD_CLOTH")
+        if not has_src:
+            layout.label(text="⚠ 请先在主面板点 “使用当前选中”", icon="ERROR")
         op = layout.operator("afr.fabric_solidify", icon="MOD_SOLIDIFY")
         op.thickness = ps.min_wall_thickness_mm
 
@@ -116,7 +190,7 @@ class AFR_PT_Tool_Figure(bpy.types.Panel):
     bl_category = "AI Figure Refiner"
     bl_parent_id = "AFR_PT_Main"
     bl_label = "人物修正"
-    bl_options = {"DEFAULT_CLOSED"}
+    bl_options = set()   # V0.14: unfold all sub-panels by default
 
     def draw(self, context):
         sc = context.scene
@@ -139,7 +213,7 @@ class AFR_PT_Tool_Print(bpy.types.Panel):
     bl_category = "AI Figure Refiner"
     bl_parent_id = "AFR_PT_Main"
     bl_label = "打印计算"
-    bl_options = {"DEFAULT_CLOSED"}
+    bl_options = set()   # V0.14: unfold all sub-panels by default
 
     def draw(self, context):
         ps = context.scene.afr_print
@@ -167,15 +241,24 @@ class AFR_PT_Tool_Connector(bpy.types.Panel):
     bl_category = "AI Figure Refiner"
     bl_parent_id = "AFR_PT_Main"
     bl_label = "连接/拼接部件 (半自动·零布尔, V0.11)"
-    bl_options = {"DEFAULT_CLOSED"}
+    bl_options = set()   # V0.14: unfold all sub-panels by default
 
     def draw(self, context):
         layout = self.layout
-        layout.label(text="移动 3D 游标到接缝 → 生成 凸柱+套筒", icon="INFO")
-        layout.operator("afr.create_connector", icon="PLUS").kind = "round"
+        layout.label(text="⚠ 连接键生成在 3D 游标位置", icon="CURSOR")
+        layout.label(text="游标移动：Left Mouse 空白区 / Shift+S → Cursor to World Origin",
+                     icon="INFO")
+        layout.separator()
+        layout.label(text="生成 (V0.11 零布尔：凸柱 + 套筒，可直接打印)")
+        layout.operator("afr.create_connector", text="圆柱 (Round · 游标)",
+                        icon="PLUS").kind = "round"
         row = layout.row(align=True)
-        row.operator("afr.create_connector", icon="SPHERE").kind = "ball"
-        row.operator("afr.create_connector", icon="MOD_WEDGE").kind = "dovetail"
+        row.operator("afr.create_connector", text="球窝 (Ball)",
+                     icon="SPHERE").kind = "ball"
+        row.operator("afr.create_connector", text="燕尾 (Dovetail)",
+                     icon="MOD_WEDGE").kind = "dovetail"
+        layout.separator()
+        layout.label(text="挖孔 (legacy：把套筒切到选中 mesh)", icon="INFO")
         layout.operator("afr.carve_socket", icon="MOD_BOOLEAN")
 
 
@@ -185,7 +268,7 @@ class AFR_PT_Tool_Agent(bpy.types.Panel):
     bl_category = "AI Figure Refiner"
     bl_parent_id = "AFR_PT_Main"
     bl_label = "AI 智能体 (MCP 接口)"
-    bl_options = {"DEFAULT_CLOSED"}
+    bl_options = set()   # V0.14: unfold all sub-panels by default
 
     def draw(self, context):
         layout = self.layout
@@ -205,7 +288,7 @@ class AFR_PT_Tool_Export(bpy.types.Panel):
     bl_category = "AI Figure Refiner"
     bl_parent_id = "AFR_PT_Main"
     bl_label = "导出调试"
-    bl_options = {"DEFAULT_CLOSED"}
+    bl_options = set()   # V0.14: unfold all sub-panels by default
 
     def draw(self, context):
         sc = context.scene
