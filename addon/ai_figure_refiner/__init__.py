@@ -1,10 +1,10 @@
 bl_info = {
     "name": "AI Figure Model Refiner (AI 手办模型精修器)",
     "author": "Klisuaiji",
-    "version": (0, 11, 0),
+    "version": (0, 12, 0),
     "blender": (5, 2, 0),
     "location": "View3D > Sidebar > AI Figure Refiner",
-    "description": "将 AI 生成的 3D 手办修复为 FDM 3D 打印可生产模型；AI 推理通过外部 AI 智能体（MCP 接口）驱动 Blender。",
+    "description": "将 AI 生成的 3D 手办修复为 FDM 3D 打印可生产模型；工具集模式按需执行：拆分部件/头发修正/布料修正/人物修正/打印计算/导出调试；AI 推理通过外部 AI 智能体（MCP 接口）驱动 Blender。",
     "category": "Object",
 }
 
@@ -17,9 +17,9 @@ except ImportError:
 
 if bpy is not None:
     from .operators import CLASSES, AFRLogEntry, AFRPrintSettings, AFRRefView
-    from .ui.panel import AFR_PT_Main
+    from .ui.panel import PANELS
     from .reference import views as _ref_views
-    _CLASSES = tuple(list(CLASSES) + [AFR_PT_Main])
+    _CLASSES = tuple(list(CLASSES) + list(PANELS))
 else:
     _CLASSES = ()  # type: ignore
     _ref_views = None  # type: ignore
@@ -39,7 +39,7 @@ def register():
     bpy.types.Scene.afr_ref_views = bpy.props.CollectionProperty(type=AFRRefView)
     _ref_views.ensure_ref_state(bpy.context.scene) if hasattr(bpy.context, "scene") and bpy.context.scene else None
     from .core.logging import logger
-    logger.info("AI Figure Refiner v0.11（半自动凹凸连接：凸柱 + 套筒，零布尔）已注册（Blender 5.2 LTS）")
+    logger.info("AI Figure Refiner v0.12（工具集模式：拆分/头发/布料/人物/打印计算/导出调试）已注册（Blender 5.2 LTS）")
 
 
 def unregister():

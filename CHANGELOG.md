@@ -3,6 +3,71 @@
 All notable changes to the **AI Figure Model Refiner** are documented here.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.12.0] — 2026-08-20 — V0.12 (Toolset UI: fixed workflow -> on-demand tools)
+
+### Changed
+
+- **N-Panel redesigned as a toolset.** The fixed multi-step workflow is replaced
+  by independent, collapsible tool panels the user runs on demand:
+  - `AFR_PT_Main` "AI 手办模型工具" — source object + a **4-quadrant preview
+    area** (前/后/左/右) that switches to the FRONT/BACK/LEFT/RIGHT reference
+    cameras with one click (Ctrl+Alt+Q for Quad View).
+  - Sub-panels (start collapsed): **拆分部件**, **头发修正**, **布料修正**,
+    **人物修正**, **打印计算**, **导出调试**, plus 连接/拼接部件 (V0.11) and
+    AI 智能体 (MCP).
+- Existing operators re-grouped under the six tools; legacy pipeline step
+  progress UI removed from the panel (machinery untouched).
+
+### Added
+
+- **`AFR_OT_SplitByPart`** (`afr.split_by_part`) — splits the source object into
+  one object per semantic label (HAIR/HEAD/BODY/FABRIC/BASE) via
+  `parts_ops.hair.extract_part`; replaces the hair-only extraction in the split
+  workflow.
+
+### Notes
+
+- Design follows the user's sketch: title "AI 手办模型工具", 4-quadrant preview
+  (前|后 / 左|右), six tool entries (拆分部件 / 头发修正 / 布料修正 / 人物修正 /
+  打印计算 / 导出调试).
+- Verified headless on Blender 5.2.0 LTS: register (9 panels, 37 operators),
+  split_by_part smoke, printability, 3MF export, reference cameras. Installable
+  zip `output/ai_figure_refiner_v0.12.zip` (34 files) validated with a clean
+  `bpy.ops.preferences.addon_install` + enable.
+
+## [0.11.0] — 2026-08-20 — V0.11 (semi-automatic, solver-free joints)
+
+### Changed
+
+- **Connector flow is now semi-automatic and solver-free (zero Boolean).** The
+  user places a connection point (the 3D cursor) and the operator emits BOTH a
+  male **peg** and a matching female **socket** — a real concave **blind-bore
+  cup**, each a watertight, directly-printable solid. No Boolean is ever run on
+  the figure; printed pieces are glued/snapped at assembly.
+- `add_connector_between` is non-destructive: peg parents to part A, socket to
+  part B (returns `parented_to`, no carving).
+- `AFR_OT_CreateConnector` gains `axis` (view-aligned / fixed +Z), `socket_wall`
+  and a properties dialog; MCP `create_connector` gains `socket_wall_mm`.
+
+### Fixed
+
+- **`_make_socket_solid` manifold bug** — the bore-floor fan at `z=0` was
+  coincident with the bottom annulus, making every `ib[i]-ib[j]` edge shared by
+  3 faces (48 non-manifold edges). The bore is now a true **blind bore**: floor
+  lifted to `z = bottom_thickness > 0`, bottom rebuilt as a full disk
+  (center→`ro` at `z=0`). Every edge now has exactly 2 incident faces
+  (`nonmanifold=0`).
+
+### Notes
+
+- User decision: abandon the Boolean-solve path (Rodin non-manifold shells
+  collapse under Boolean DIFFERENCE) in favor of the semi-automatic,
+  solver-free joint generation.
+- Headless test `scripts/test_connectors.py` updated for V0.11 (round emits
+  peg+socket without cutter; ball/dovetail use legacy cutters;
+  `add_connector_between` asserts parenting). Added
+  `scripts/verify_installed_v011.py`.
+
 ## [0.10.0] — 2026-08-20 — V0.10 (Connector / joint generation for assembly)
 
 ### Added (Phase 10)

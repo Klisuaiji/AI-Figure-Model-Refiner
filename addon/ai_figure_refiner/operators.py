@@ -791,6 +791,38 @@ class AFR_OT_SemanticClearLabels(bpy.types.Operator):
             return {"CANCELLED"}
 
 
+class AFR_OT_SplitByPart(bpy.types.Operator):
+    bl_idname = "afr.split_by_part"
+    bl_label = "按标注拆分所有部件"
+    bl_description = "按语义标注（HAIR/HEAD/BODY/FABRIC/BASE）把源对象拆成多个独立对象，每个部件一个"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        obj = _resolve_source(context)
+        if obj is None or obj.type != "MESH":
+            logger.error("没有可用的网格源对象")
+            return {"CANCELLED"}
+        try:
+            sem_parts.ensure_part_attribute(obj)
+            created = []
+            for label in sem_parts.PART_LABELS:
+                if label == "UNLABELED":
+                    continue
+                new_obj = hair_ops.extract_part(obj, sem_parts.PART_ID[label])
+                if new_obj is not None:
+                    created.append(new_obj.name)
+                    logger.info("  拆分出 %s → %s" % (label, new_obj.name))
+            if not created:
+                logger.warning("未拆出任何部件（请先应用启发式标注）")
+                return {"CANCELLED"}
+            logger.info("按标注拆分完成，共 %d 个部件: %s" % (
+                len(created), ", ".join(created)))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("拆分失败: %s" % e)
+            return {"CANCELLED"}
+
+
 class AFR_OT_RefFocusView(bpy.types.Operator):
     bl_idname = "afr.ref_focus_view"
     bl_label = "切换到此参考视角"
@@ -1067,6 +1099,7 @@ CLASSES = (
     AFR_OT_SemanticBrushFlood,
     AFR_OT_SemanticBrushUndo,
     AFR_OT_SemanticClearLabels,
+    AFR_OT_SplitByPart,
     AFR_OT_HairExtract,
     AFR_OT_HairSolidify,
     AFR_OT_HairGenerate,
