@@ -222,6 +222,7 @@ def create_connector(backend: BlenderBackend, kind: str = "round",
                      length: float = 4.0, clearance: float = 0.2,
                      nozzle_mm: float = 0.4, with_flange: bool = False,
                      chamfer: bool = True, opening_ratio: float = 0.7,
+                     socket_wall_mm: float = 1.2,
                      name: str = "AFR_Connector") -> dict:
     body = (
         "from ai_figure_refiner.parts_ops import connectors as connector_ops\n"
@@ -229,16 +230,19 @@ def create_connector(backend: BlenderBackend, kind: str = "round",
         "    bpy.context.scene, kind=%r, position=%r, direction=%r,\n"
         "    diameter=%r, depth=%r, length=%r, clearance=%r,\n"
         "    nozzle_mm=%r, with_flange=%r, chamfer=%r,\n"
-        "    opening_ratio=%r, name=%r)\n"
+        "    opening_ratio=%r, socket_wall_mm=%r, name=%r)\n"
         "AFR_RESULT = {\n"
         "    'kind': res['kind'],\n"
         "    'male': res['male'].name if res.get('male') else None,\n"
+        "    'female_socket': res['female_socket'].name\n"
+        "                       if res.get('female_socket') else None,\n"
         "    'female_cutter': res['female_cutter'].name\n"
         "                    if res.get('female_cutter') else None,\n"
         "    'params': res['params'],\n"
         "}\n"
     ) % (kind, tuple(position), tuple(direction), diameter, depth, length,
-         clearance, nozzle_mm, with_flange, chamfer, opening_ratio, name)
+         clearance, nozzle_mm, with_flange, chamfer, opening_ratio,
+         socket_wall_mm, name)
     return _run(backend, body)
 
 

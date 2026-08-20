@@ -3,23 +3,28 @@
 Generates the *interlocking convex/concave parts* (凹凸连接件) a 3D-printed
 figure needs so its split pieces can be assembled:
 
-  - ``round``    : cylindrical peg (male) + matching hole (female cutter).
-                   The universal joint for assembling split body/limb/head parts.
-  - ``ball``     : spherical ball (male) + matching socket bowl (female cutter).
-                   For articulated figures (head / shoulders / hips rotation).
-  - ``dovetail`` : trapezoidal tab (male) + matching slot (female cutter).
-                   For strong flat-interface splits (e.g. a flat base seam).
+  - ``round``    : cylindrical peg (male) + matching socket cup (female, a real
+                   concave blind bore). The universal joint for assembling split
+                   body/limb/head parts. This is the default, solver-free joint.
+  - ``ball``     : spherical ball (male) + matching socket bowl (female cutter,
+                   for the optional carve path). For articulated figures.
+  - ``dovetail`` : trapezoidal tab (male) + matching slot (female cutter,
+                   for the optional carve path). For strong flat-interface splits.
 
 Design notes (inspired by the public techniques of JointForge, Easy-Print and
 fdm_joints, re-implemented here from scratch under the project's MIT license):
 
   * Every joint is built as a **standalone solid mesh** via ``bmesh`` /
     primitive operators. No fragile boolean is used to *build* a connector.
-  * The female side is delivered as a **cutter** mesh (a closed solid). The
-    user carves it into the receiving part with :func:`carve_socket`
-    (a single guarded Boolean DIFFERENCE). This keeps generation non-destructive
-    until the user commits.
-  * **FDM clearance** is built in. The female cutter is enlarged by ``2 * clearance``
+  * Default mode is **semi-automatic and solver-free**: the user places a
+    connection point (the 3D cursor) and the operator emits BOTH a male peg and
+    a matching female **socket** (a real concave cup with a blind bore). Each is
+    a watertight, directly-printable solid — no Boolean is ever run on the
+    figure. The two printed pieces are glued/snapped together at assembly.
+  * An optional legacy *cutter* path still exists (:func:`carve_socket` with
+    ``legacy_cutter=True``) for Boolean-carving a hole into a manifold receiving
+    part, but it is no longer the default and is not required for assembly.
+  * **FDM clearance** is built in. The socket bore is enlarged by ``2 * clearance``
     so the printed male part slides in with the right tolerance. Presets scale
     the default size/clearance by nozzle diameter (0.2 / 0.4 / 0.6 mm).
 
@@ -181,6 +186,58 @@ def _make_hole_cutter(scene, position, q, diameter, depth, clearance, name):
     return cutter
 
 
+def _make_socket_solid(scene, position, q, peg_diameter, socket_depth,
+                       clearance, wall, name):
+    """Watertight concave cup (true BLIND bore) the male peg inserts into.
+
+    Built as a single closed bmesh — no Boolean. The cup is a solid outer
+    cylinder (radius ``ro``, total height ``Hb``) with a blind cylindrical hole
+    (radius ``ri = peg_radius + clearance``) drilled from the *top* mouth down to
+    ``z = bottom_thickness``; the base below the bore is solid.
+
+    Surface decomposition (all edges shared by exactly 2 faces -> manifold):
+      * outer wall   : cylinder radius ``ro``, ``z=0`` -> ``Hb``
+      * bottom disk  : full fan center->``ro`` at ``z=0`` (solid base exterior)
+      * bore wall    : cylinder radius ``ri``, ``z=bottom_thickness`` -> ``Hb``
+      * bore floor   : full fan center->``ri`` at ``z=bottom_thickness``
+      * top rim      : annulus ``ri``->``ro`` at ``z=Hb``
+
+    The previous bug put the bore floor at ``z=0`` coincident with the bottom
+    annulus, making the ``ib[i]-ib[j]`` edge shared by 3 faces (non-manifold).
+    Lifting the bore floor to ``z > 0`` removes the coincidence.
+    """
+    pr = float(peg_diameter) / 2.0
+    ri = pr + float(clearance)                 # bore radius
+    ro = ri + max(float(wall), 0.4)            # outer radius (wall >= 0.4mm)
+    bore_depth = float(socket_depth)           # depth of the blind hole
+    bottom_thickness = max(0.4, ri * 0.2)      # solid base below the bore
+    Hb = bottom_thickness + bore_depth         # total cup height
+    segs = 48
+    bm = bmesh.new()
+    # ctr_b : center of the solid base (z=0).  ctr_i : center of the bore floor.
+    ctr_b = bm.verts.new((0.0, 0.0, 0.0))
+    ctr_i = bm.verts.new((0.0, 0.0, bottom_thickness))
+    ob, ot, ib, it = [], [], [], []
+    for i in range(segs):
+        a = 2.0 * math.pi * i / segs
+        c, s = math.cos(a), math.sin(a)
+        ob.append(bm.verts.new((ro * c, ro * s, 0.0)))                 # base ring
+        ot.append(bm.verts.new((ro * c, ro * s, Hb)))                  # top ring
+        ib.append(bm.verts.new((ri * c, ri * s, bottom_thickness)))     # bore floor ring
+        it.append(bm.verts.new((ri * c, ri * s, Hb)))                  # mouth ring
+    for i in range(segs):
+        j = (i + 1) % segs
+        bm.faces.new((ob[i], ot[i], ot[j], ob[j]))     # outer wall
+        bm.faces.new((ib[i], ib[j], it[j], it[i]))     # bore wall (blind)
+        bm.faces.new((ot[i], it[i], it[j], ot[j]))     # top rim
+        bm.faces.new((ctr_b, ob[j], ob[i]))            # bottom disk (solid base)
+        bm.faces.new((ctr_i, ib[i], ib[j]))            # bore floor fan
+    bmesh.ops.recalc_face_normals(bm, faces=list(bm.faces))
+    sock = _new_object_from_bm(scene, bm, name)
+    _orient_and_place(sock, position, q)
+    return sock
+
+
 def _make_socket_cutter(scene, position, q, ball_diameter, depth,
                         clearance, opening_ratio, name):
     """Spherical bowl cutter. Mouth faces +Z; ball snaps in from +Z.
@@ -255,7 +312,8 @@ def create_connector(scene, kind=KIND_ROUND, position=(0.0, 0.0, 0.0),
                      length=4.0, clearance=0.2, nozzle_mm=0.4,
                      with_flange=False, chamfer=True,
                      dovetail_angle_deg=8.0, opening_ratio=0.7,
-                     name="AFR_Connector"):
+                     socket_depth=None, socket_wall_mm=1.2,
+                     legacy_cutter=False, name="AFR_Connector"):
     """Create one connector set (male + matching female cutter).
 
     Returns a dict with keys ``kind``, ``male`` (mesh object or None),
@@ -271,37 +329,47 @@ def create_connector(scene, kind=KIND_ROUND, position=(0.0, 0.0, 0.0),
     female = None
     base = name
 
+    female_socket = None
+    female_cutter = None
     if kind == KIND_ROUND:
         male = _make_peg(scene, pos, q, diameter, length, chamfer,
                          with_flange, base + "_peg")
-        female = _make_hole_cutter(scene, pos, q, diameter, depth, clearance,
-                                   base + "_hole")
+        female_socket = _make_socket_solid(
+            scene, pos, q, diameter, socket_depth or depth, clearance,
+            socket_wall_mm, base + "_socket")
+        if legacy_cutter:
+            female_cutter = _make_hole_cutter(
+                scene, pos, q, diameter, depth, clearance, base + "_hole")
     elif kind == KIND_BALL:
         male = _make_ball(scene, pos, q, diameter, base + "_ball")
-        female = _make_socket_cutter(scene, pos, q, diameter, depth, clearance,
-                                     opening_ratio, base + "_socket")
+        female_cutter = _make_socket_cutter(
+            scene, pos, q, diameter, depth, clearance,
+            opening_ratio, base + "_socket")
     elif kind == KIND_DOVETAIL:
         male = _make_dovetail_tab(scene, pos, q, diameter, diameter * 0.6,
                                   length, dovetail_angle_deg, base + "_tab")
-        female = _make_slot_cutter(scene, pos, q, diameter, diameter * 0.6,
-                                  length, dovetail_angle_deg, clearance,
-                                  base + "_slot")
+        female_cutter = _make_slot_cutter(
+            scene, pos, q, diameter, diameter * 0.6,
+            length, dovetail_angle_deg, clearance, base + "_slot")
 
-    logger.info("create_connector %s @%s dir=%s d=%.2f depth=%.2f len=%.2f clr=%.2f" % (
+    logger.info("create_connector %s @%s dir=%s d=%.2f depth=%.2f len=%.2f clr=%.2f socket_wall=%.2f" % (
                 kind, tuple(round(p, 2) for p in pos),
                 tuple(round(x, 2) for x in direction),
-                diameter, depth, length, clearance))
+                diameter, depth, length, clearance, socket_wall_mm))
     return {
         "kind": kind,
         "male": male,
-        "female_cutter": female,
+        "female_socket": female_socket,
+        "female_cutter": female_cutter,
         "params": {
             "position": pos, "direction": tuple(direction),
             "diameter": diameter, "depth": depth, "length": length,
             "clearance": clearance, "nozzle_mm": nozzle_mm,
+            "socket_wall_mm": socket_wall_mm,
             "with_flange": with_flange, "chamfer": chamfer,
             "dovetail_angle_deg": dovetail_angle_deg,
             "opening_ratio": opening_ratio,
+            "legacy_cutter": legacy_cutter,
         },
     }
 
@@ -343,14 +411,17 @@ def carve_socket(scene, target_obj, cutter_obj, apply=True):
 def add_connector_between(scene, obj_a, obj_b, kind=KIND_ROUND,
                          diameter=5.0, depth=4.0, length=4.0, clearance=0.2,
                          nozzle_mm=0.4, with_flange=False, chamfer=True,
-                         opening_ratio=0.7, name="AFR_Connector"):
-    """Place a connector between two parts.
+                         opening_ratio=0.7, socket_wall_mm=1.2,
+                         name="AFR_Connector"):
+    """Place a connector pair between two parts, solver-free.
 
-    The male peg/ball/tab is created at the midpoint between the two parts'
-    world centers, pointing from A to B. The female cutter is created at the
-    same midpoint and carved into ``obj_b`` (the receiving part).
+    Generates the male peg and matching female socket at the midpoint between
+    the two parts' world centers, oriented along A->B. Neither piece is carved:
+    the peg is parented to ``obj_a`` and the socket to ``obj_b`` so they travel
+    with their respective parts; the user glues/snaps them at assembly.
 
-    Returns the dict from :func:`create_connector` plus ``carved`` info.
+    Returns the dict from :func:`create_connector` plus ``midpoint`` and
+    ``parented_to`` (the two parents' names).
     """
     if obj_a is None or obj_b is None:
         raise ValueError("two objects required")
@@ -365,11 +436,15 @@ def add_connector_between(scene, obj_a, obj_b, kind=KIND_ROUND,
         scene, kind=kind, position=mid, direction=direction,
         diameter=diameter, depth=depth, length=length, clearance=clearance,
         nozzle_mm=nozzle_mm, with_flange=with_flange, chamfer=chamfer,
-        opening_ratio=opening_ratio, name=name,
+        opening_ratio=opening_ratio, socket_wall_mm=socket_wall_mm, name=name,
     )
-    carved = None
-    if res.get("female_cutter") is not None:
-        carved = carve_socket(scene, obj_b, res["female_cutter"], apply=True)
-    res["carved"] = carved
+    peg = res.get("male")
+    sock = res.get("female_socket")
+    if peg is not None:
+        peg.parent = obj_a
+    if sock is not None:
+        sock.parent = obj_b
     res["midpoint"] = tuple(mid)
+    res["parented_to"] = (obj_a.name if peg is not None else None,
+                          obj_b.name if sock is not None else None)
     return res

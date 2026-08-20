@@ -37,26 +37,32 @@ def fresh_scene():
 def main():
     scene = fresh_scene()
     fails = []
-    print("=== connector generation test (Phase 10) ===")
+    print("=== connector generation test (V0.11: semi-auto, solver-free) ===")
 
-    # ---- 1. round (peg + hole), with flange + chamfer ----
+    # ---- 1. round (peg + socket cup) — the default joint ----
     r = C.create_connector(scene, kind="round", position=(0, 0, 0),
                            direction=(0, 0, 1), diameter=5.0, depth=4.0,
                            length=4.0, clearance=0.2, with_flange=True,
-                           chamfer=True, name="T_round")
-    assert r["male"] and r["female_cutter"], "round: missing parts"
+                           chamfer=True, socket_wall_mm=1.2, name="T_round")
+    assert r["male"] and r["female_socket"], "round: missing peg/socket"
     nm_peg = non_manifold_edges(r["male"])
-    nm_hole = non_manifold_edges(r["female_cutter"])
+    nm_soc = non_manifold_edges(r["female_socket"])
     if nm_peg:
         fails.append("round peg non-manifold edges=%d" % nm_peg)
-    if nm_hole:
-        fails.append("round hole cutter non-manifold edges=%d" % nm_hole)
-    print("  round: peg=%s(%d v) hole=%s(%d v) nonman=%d/%d"
+    if nm_soc:
+        fails.append("round socket cup non-manifold edges=%d" % nm_soc)
+    print("  round: peg=%s(%d v) socket=%s(%d v) nonman=%d/%d"
           % (r["male"].name, len(r["male"].data.vertices),
-             r["female_cutter"].name, len(r["female_cutter"].data.vertices),
-             nm_peg, nm_hole))
+             r["female_socket"].name, len(r["female_socket"].data.vertices),
+             nm_peg, nm_soc))
 
-    # ---- 2. ball (ball + socket) ----
+    # ---- 2. round must NOT emit a cutter by default (solver-free) ----
+    if r.get("female_cutter") is not None:
+        fails.append("round should not emit a cutter by default")
+    print("  round: female_cutter=None (solver-free) -> %s"
+          % (r.get("female_cutter") is None))
+
+    # ---- 3. ball (ball + socket cutter, legacy path) ----
     r = C.create_connector(scene, kind="ball", position=(12, 0, 0),
                            direction=(0, 0, 1), diameter=8.0, depth=6.0,
                            clearance=0.2, opening_ratio=0.7, name="T_ball")
@@ -68,7 +74,7 @@ def main():
           % (r["male"].name, r["female_cutter"].name,
              len(r["female_cutter"].data.vertices), nm_soc))
 
-    # ---- 3. dovetail (tab + slot) ----
+    # ---- 4. dovetail (tab + slot cutter, legacy path) ----
     r = C.create_connector(scene, kind="dovetail", position=(24, 0, 0),
                            direction=(0, 0, 1), diameter=6.0, depth=5.0,
                            length=5.0, clearance=0.2, name="T_dovetail")
@@ -84,14 +90,13 @@ def main():
              r["female_cutter"].name, len(r["female_cutter"].data.vertices),
              nm_tab, nm_slot))
 
-    # ---- 4. carve_socket: cut a hole into a cube ----
+    # ---- 5. optional legacy carve: round hole into a cube (manifold target) ----
     bpy.ops.mesh.primitive_cube_add(size=6.0, location=(0, 0, 3))
     target = bpy.context.active_object
     v_before = len(target.data.vertices)
-    # build a hole cutter at the cube top surface
     hole = C.create_connector(scene, kind="round", position=(0, 0, 6.0),
                               direction=(0, 0, 1), diameter=3.0, depth=4.0,
-                              length=4.0)["female_cutter"]
+                              length=4.0, legacy_cutter=True)["female_cutter"]
     res = C.carve_socket(scene, target, hole, apply=True)
     if not res.get("ok"):
         fails.append("carve_socket (round hole) failed: %s" % res)
@@ -99,37 +104,28 @@ def main():
     if v_after <= v_before:
         fails.append("carve_socket did not change target topology "
                      "(v %d -> %d)" % (v_before, v_after))
-    print("  carve (round hole): target v %d -> %d, ok=%s"
+    print("  carve (round hole, legacy): target v %d -> %d, ok=%s"
           % (v_before, v_after, res.get("ok")))
 
-    # ---- 5. carve_socket with ball socket into a cube ----
-    bpy.ops.mesh.primitive_cube_add(size=8.0, location=(0, 20, 4))
-    target2 = bpy.context.active_object
-    v_before2 = len(target2.data.vertices)
-    socket = C.create_connector(scene, kind="ball", position=(0, 20, 8.0),
-                                direction=(0, 0, 1), diameter=8.0, depth=6.0,
-                                clearance=0.2)["female_cutter"]
-    res2 = C.carve_socket(scene, target2, socket, apply=True)
-    if not res2.get("ok"):
-        fails.append("carve_socket (ball socket) failed: %s" % res2)
-    print("  carve (ball socket): target v %d -> %d, ok=%s"
-          % (v_before2, len(target2.data.vertices), res2.get("ok")))
-
-    # ---- 6. add_connector_between two parts ----
+    # ---- 6. add_connector_between two parts (solver-free, parented) ----
     bpy.ops.mesh.primitive_cube_add(size=3.0, location=(-6, 0, 0))
     part_a = bpy.context.active_object
     bpy.ops.mesh.primitive_cube_add(size=3.0, location=(6, 0, 0))
     part_b = bpy.context.active_object
     res = C.add_connector_between(scene, part_a, part_b, kind="round",
                                   diameter=4.0, depth=3.0, length=3.0,
-                                  clearance=0.2, name="T_between")
-    if not res.get("carved"):
-        fails.append("add_connector_between: no carved info")
-    elif not res["carved"].get("ok"):
-        fails.append("add_connector_between: carve failed: %s" % res["carved"])
-    print("  between: mid=%s carved_ok=%s"
+                                  clearance=0.2, socket_wall_mm=1.2,
+                                  name="T_between")
+    if res.get("male") is None or res.get("female_socket") is None:
+        fails.append("add_connector_between: missing peg/socket")
+    if res.get("parented_to") != (part_a.name, part_b.name):
+        fails.append("add_connector_between: wrong parenting %s"
+                     % (res.get("parented_to"),))
+    if res.get("carved") is not None:
+        fails.append("add_connector_between must NOT carve (solver-free)")
+    print("  between: mid=%s parented_to=%s"
           % (tuple(round(x, 2) for x in res["midpoint"]),
-             res.get("carved", {}).get("ok")))
+             res.get("parented_to")))
 
     # ---- 7. preset sanity ----
     p = C.preset_from_nozzle(0.4)

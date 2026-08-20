@@ -127,7 +127,8 @@ class AFR_PT_Main(bpy.types.Panel):
         # --- Connectors (convex/concave assembly joints) -------------------
         layout.separator()
         box = layout.box()
-        box.label(text="连接/拼接部件 (凹凸, Phase 10)", icon="LINKED")
+        box.label(text="连接/拼接部件 (半自动·零布尔, V0.11)", icon="LINKED")
+        box.label(text="移动 3D 游标到接缝 → 点按钮生成 凸柱+套筒", icon="INFO")
         box.operator("afr.create_connector", icon="PLUS").kind = "round"
         row = box.row(align=True)
         row.operator("afr.create_connector", icon="SPHERE").kind = "ball"

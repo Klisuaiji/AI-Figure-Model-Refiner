@@ -931,9 +931,50 @@ class AFR_OT_CreateConnector(bpy.types.Operator):
     chamfer: bpy.props.BoolProperty(name="凸柱倒角", default=True)
     opening_ratio: bpy.props.FloatProperty(name="球窝开口比", default=0.7, min=0.3, max=0.95)
     name: bpy.props.StringProperty(name="名称前缀", default="AFR_Connector")
+    axis: bpy.props.EnumProperty(
+        name="轴向",
+        items=[
+            ("view", "对齐视角", "关节轴向 = 当前 3D 视图朝向（半自动布点）"),
+            ("z", "固定 +Z", "轴向恒为 +Z"),
+        ],
+        default="view",
+    )
+    socket_wall: bpy.props.FloatProperty(name="套筒壁厚 (mm)", default=1.2,
+                                         min=0.4, max=10.0)
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "kind")
+        layout.prop(self, "axis")
+        layout.prop(self, "place")
+        layout.prop(self, "diameter")
+        layout.prop(self, "length")
+        layout.prop(self, "depth")
+        layout.prop(self, "socket_wall")
+        layout.prop(self, "clearance")
+        layout.prop(self, "nozzle_mm")
+        layout.prop(self, "with_flange")
+        layout.prop(self, "chamfer")
+        if self.kind == "ball":
+            layout.prop(self, "opening_ratio")
 
     def execute(self, context):
         sc = context.scene
+        # resolve joint axis
+        if self.axis == "z":
+            direction = (0.0, 0.0, 1.0)
+        else:
+            rv3d = None
+            space = getattr(context, "space_data", None)
+            if space is not None and hasattr(space, "region_3d"):
+                rv3d = space.region_3d
+            if rv3d is not None:
+                direction = tuple(rv3d.view_direction)
+            else:
+                direction = (0.0, 0.0, 1.0)
         sel = [o for o in context.selected_objects if o.type == "MESH"]
         if self.place == "between" and len(sel) >= 2:
             obj_a, obj_b = sel[0], sel[1]
@@ -943,33 +984,36 @@ class AFR_OT_CreateConnector(bpy.types.Operator):
                     diameter=self.diameter, depth=self.depth, length=self.length,
                     clearance=self.clearance, nozzle_mm=self.nozzle_mm,
                     with_flange=self.with_flange, chamfer=self.chamfer,
-                    opening_ratio=self.opening_ratio, name=self.name,
+                    opening_ratio=self.opening_ratio,
+                    socket_wall_mm=self.socket_wall, name=self.name,
                 )
             except Exception as e:
                 logger.error("两部件连接件生成失败: %s" % e)
                 return {"CANCELLED"}
-            carved = res.get("carved") or {}
-            logger.info("连接件(%s) 已布于 %s<->%s 之间；挖孔=%s",
-                        self.kind, obj_a.name, obj_b.name, carved.get("ok"))
+            pa, pb = res.get("parented_to", (None, None))
+            logger.info("连接件(%s) 已布于 %s<->%s 之间（非破坏：凸归 %s / 凹归 %s）",
+                        self.kind, obj_a.name, obj_b.name, pa, pb)
             return {"FINISHED"}
-        # default: standalone pair at the 3D cursor
+        # default: standalone joint pair at the 3D cursor (semi-auto, no solve)
         pos = context.scene.cursor.location
         try:
             res = connector_ops.create_connector(
                 sc, kind=self.kind, position=tuple(pos),
-                direction=(0.0, 0.0, 1.0), diameter=self.diameter,
+                direction=direction, diameter=self.diameter,
                 depth=self.depth, length=self.length, clearance=self.clearance,
                 nozzle_mm=self.nozzle_mm, with_flange=self.with_flange,
                 chamfer=self.chamfer, opening_ratio=self.opening_ratio,
-                name=self.name,
+                socket_wall_mm=self.socket_wall, name=self.name,
             )
         except Exception as e:
             logger.error("连接件生成失败: %s" % e)
             return {"CANCELLED"}
-        logger.info("连接件(%s) 已生成：male=%s female=%s",
+        male = res.get("male")
+        sock = res.get("female_socket")
+        logger.info("连接件(%s) 已生成 @游标：凸(peg)=%s 凹(套筒)=%s（零布尔）",
                     self.kind,
-                    res["male"].name if res.get("male") else None,
-                    res["female_cutter"].name if res.get("female_cutter") else None)
+                    male.name if male else None,
+                    sock.name if sock else None)
         return {"FINISHED"}
 
 
