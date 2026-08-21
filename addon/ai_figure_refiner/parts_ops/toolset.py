@@ -69,6 +69,121 @@ def prefix_selected(context, prefix):
 
 
 # ---------------------------------------------------------------------------
+# Part naming (the after.zip contract: {prefix}-{中文部件名}.stl)
+# ---------------------------------------------------------------------------
+def name_part(obj, name, lr=None):
+    """Set the printable part name on ``obj``.
+
+    Stores ``obj["afr_part_name"]`` = name (+ L/R suffix if requested). The
+    packaging operator prefers this over the raw object name, so a part named
+    "手" with lr="R" exports as ``PWY-手R.stl``. Returns the final name.
+    """
+    if obj is None or obj.type != "MESH":
+        raise ValueError("MESH required")
+    final = name.strip()
+    if lr:
+        final = "%s%s" % (final, lr.strip().upper())
+    obj["afr_part_name"] = final
+    return final
+
+
+def bbox_center(obj):
+    """World-space bounding-box center of ``obj``."""
+    bm = bmesh.new()
+    try:
+        bm.from_mesh(obj.data)
+        bm.transform(obj.matrix_world)
+        if not bm.verts:
+            return Vector((0.0, 0.0, 0.0))
+        xs = [v.co.x for v in bm.verts]
+        ys = [v.co.y for v in bm.verts]
+        zs = [v.co.z for v in bm.verts]
+        return Vector(((min(xs) + max(xs)) / 2,
+                       (min(ys) + max(ys)) / 2,
+                       (min(zs) + max(zs)) / 2))
+    finally:
+        bm.free()
+
+
+def bbox_dims(obj):
+    """World-space bounding-box dimensions (w, h, d) of ``obj``."""
+    bm = bmesh.new()
+    try:
+        bm.from_mesh(obj.data)
+        bm.transform(obj.matrix_world)
+        if not bm.verts:
+            return (0.0, 0.0, 0.0)
+        xs = [v.co.x for v in bm.verts]
+        ys = [v.co.y for v in bm.verts]
+        zs = [v.co.z for v in bm.verts]
+        return (max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
+    finally:
+        bm.free()
+
+
+def auto_name_lr(objects, base_name, axis="X", tol_ratio=0.15, left_side="L"):
+    """Group mirror-symmetric objects and name them L/R.
+
+    Objects are grouped by similar bounding-box dimensions; pairs whose
+    bbox centers are mirrored across the chosen axis (default X) get the
+    L/R suffix — the one on the negative side of the axis gets ``left_side``
+    (default "L"). Returns a dict {obj.name: final_name}.
+    """
+    result = {}
+    dims_of = {o.name: bbox_dims(o) for o in objects}
+    center_of = {o.name: bbox_center(o) for o in objects}
+    used = set()
+
+    def dims_close(a, b):
+        return all(abs(x - y) <= max(tol_ratio * max(abs(x), abs(y), 1e-6), 1e-3)
+                   for x, y in zip(a, b))
+
+    def close(a, b):
+        return abs(a - b) < tol_ratio * 2 * max(abs(a), abs(b), 1e-3)
+
+    for o in objects:
+        if o.name in used or o.name in result:
+            continue
+        c = center_of[o.name]
+        # find a mirror partner across the axis
+        partner = None
+        for q in objects:
+            if q.name == o.name or q.name in used:
+                continue
+            if not dims_close(dims_of[o.name], dims_of[q.name]):
+                continue
+            cq = center_of[q.name]
+            # mirror across axis: cross coords close, axis coord opposite sign
+            if axis == "X":
+                mirror_ok = (close(cq.y, c.y) and close(cq.z, c.z) and
+                             cq.x * c.x < 0 and close(abs(cq.x), abs(c.x)))
+            elif axis == "Y":
+                mirror_ok = (close(cq.x, c.x) and close(cq.z, c.z) and
+                             cq.y * c.y < 0 and close(abs(cq.y), abs(c.y)))
+            else:
+                mirror_ok = (close(cq.x, c.x) and close(cq.y, c.y) and
+                             cq.z * c.z < 0 and close(abs(cq.z), abs(c.z)))
+            if mirror_ok:
+                partner = q
+                break
+        if partner is not None:
+            axis_coord = c.x if axis == "X" else (c.y if axis == "Y" else c.z)
+            if axis_coord < 0:
+                result[o.name] = name_part(o, base_name, left_side)
+                result[partner.name] = name_part(partner, base_name,
+                                                 "R" if left_side == "L" else "L")
+            else:
+                result[partner.name] = name_part(partner, base_name, left_side)
+                result[o.name] = name_part(o, base_name,
+                                           "R" if left_side == "L" else "L")
+            used.add(o.name)
+            used.add(partner.name)
+        else:
+            result[o.name] = name_part(o, base_name)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Cleanup
 # ---------------------------------------------------------------------------
 def cleanup(obj, merge_dist=0.001):

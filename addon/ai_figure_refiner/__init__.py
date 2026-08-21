@@ -55,6 +55,8 @@ def register():
     bpy.types.Scene.afr_ref_views = bpy.props.CollectionProperty(type=AFRRefView)
     bpy.types.Scene.afr_package_prefix = bpy.props.StringProperty(
         name="打包前缀", default="")
+    bpy.types.Scene.afr_part_name_input = bpy.props.StringProperty(
+        name="部件名", default="")
     _ref_views.ensure_ref_state(bpy.context.scene) if hasattr(bpy.context, "scene") and bpy.context.scene else None
     from .core.logging import logger
     logger.info("AI Figure Refiner v0.15（工具集 + 三状态拆分 + 每部件填充闭合水密化 + 四视图参考图→多模态智能体辅助标注，正面必传；GPL-3.0）已注册（Blender 5.2 LTS）")
@@ -70,7 +72,7 @@ def unregister():
             pass
     for prop in ("afr_source", "afr_step", "afr_log", "afr_diag_json",
                  "afr_print_json", "afr_print", "afr_ref_views",
-                 "afr_package_prefix"):
+                 "afr_package_prefix", "afr_part_name_input"):
         if hasattr(bpy.types.Scene, prop):
             delattr(bpy.types.Scene, prop)
 

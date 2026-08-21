@@ -130,6 +130,7 @@ class AFR_PT_Tool_Split(bpy.types.Panel):
     bl_options = set()   # V0.14: unfold all sub-panels by default
 
     def draw(self, context):
+        sc = context.scene
         layout = self.layout
         layout.label(text="先标注，后拆分；每个部件独立成对象", icon="GROUP_VCOL")
         layout.operator("afr.semantic_apply_heuristics", icon="AUTO")
@@ -141,6 +142,31 @@ class AFR_PT_Tool_Split(bpy.types.Panel):
         op = row.operator("afr.semantic_brush_flood", text="全清空", icon="X")
         op.label_name = "UNLABELED"
         layout.operator("afr.semantic_brush_undo", icon="LOOP_BACK")
+        # --- part naming (after.zip contract) ------------------------------
+        layout.separator()
+        box = layout.box()
+        box.label(text="部件命名（打包用 {前缀}-{部件名}.stl）", icon="OUTLINER")
+        box.prop(sc, "afr_part_name_input", text="部件名")
+        row = box.row(align=True)
+        op = row.operator("afr.name_part", text="命名选中", icon="RENAME")
+        op.name = sc.afr_part_name_input
+        op = row.operator("afr.name_part", text="命名+L", icon="RENAME")
+        op.name = sc.afr_part_name_input
+        op.lr = "L"
+        op = row.operator("afr.name_part", text="命名+R", icon="RENAME")
+        op.name = sc.afr_part_name_input
+        op.lr = "R"
+        row2 = box.row(align=True)
+        op = row2.operator("afr.auto_name_lr", text="对称自动 L/R", icon="MOD_MIRROR")
+        op.base_name = sc.afr_part_name_input or "手"
+        named = [o for o in bpy.data.objects
+                 if o.type == "MESH" and o.get("afr_part_name")]
+        box.label(text="已命名部件 %d 个" % len(named), icon="CHECKMARK")
+        row3 = box.row(align=True)
+        row3.operator("afr.export_name_manifest", text="导出清单",
+                      icon="FILE_TEXT")
+        row3.operator("afr.import_name_manifest", text="导入清单",
+                      icon="FILE_FOLDER")
 
 
 class AFR_PT_Tool_Hair(bpy.types.Panel):

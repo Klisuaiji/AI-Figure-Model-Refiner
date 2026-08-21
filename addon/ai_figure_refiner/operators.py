@@ -1396,7 +1396,8 @@ class AFR_OT_ExportPartStlZip(bpy.types.Operator, ExportHelper):
         try:
             names = []
             for o in objs:
-                base = o.name
+                # prefer the printable part name set by the naming tools
+                base = o.get("afr_part_name") or o.name
                 if prefix:
                     sep = "" if prefix.endswith(("-", "_")) else "-"
                     fname = "%s%s%s.stl" % (prefix, sep, base)
@@ -1557,6 +1558,126 @@ class AFR_OT_ToolsetStats(bpy.types.Operator):
 
 
 # ---------------------------------------------------------------------------
+# Part naming (after.zip naming contract: {prefix}-{中文部件名}.stl)
+# ---------------------------------------------------------------------------
+class AFR_OT_NamePart(bpy.types.Operator):
+    bl_idname = "afr.name_part"
+    bl_label = "命名部件"
+    bl_description = ("给选中的网格设置可打印部件名（存入 afr_part_name），"
+                      "打包时优先使用该名称；可选 L/R 后缀")
+    bl_options = {"REGISTER", "UNDO"}
+
+    name: bpy.props.StringProperty(name="部件名", default="",
+                                   description="如 手/脚/帽子；留空则用对象名")
+    lr: bpy.props.EnumProperty(
+        name="L/R",
+        items=[("", "无", ""), ("L", "L", ""), ("R", "R", "")],
+        default="")
+
+    def execute(self, context):
+        objs = [o for o in context.selected_objects if o.type == "MESH"]
+        if not objs:
+            logger.error("请先选中要命名的网格")
+            return {"CANCELLED"}
+        base = self.name.strip() or None
+        n = 0
+        for o in objs:
+            final = toolset_ops.name_part(o, base or o.name, self.lr or None)
+            logger.info("部件 %s → %s" % (o.name, final))
+            n += 1
+        return {"FINISHED"}
+
+
+class AFR_OT_AutoNameLR(bpy.types.Operator):
+    bl_idname = "afr.auto_name_lr"
+    bl_label = "对称自动命名 L/R"
+    bl_description = ("按包围盒对称检测把选中的左右成对部件自动命名为 "
+                      "「基础名L / 基础名R」")
+    bl_options = {"REGISTER", "UNDO"}
+
+    base_name: bpy.props.StringProperty(name="基础名", default="手",
+                                        description="如 手 → 手L / 手R")
+    axis: bpy.props.EnumProperty(
+        name="对称轴",
+        items=[("X", "X（左右镜像）", ""), ("Y", "Y", ""), ("Z", "Z", "")],
+        default="X")
+    left_side: bpy.props.EnumProperty(
+        name="负侧标记",
+        items=[("L", "L", ""), ("R", "R", "")],
+        default="L")
+
+    def execute(self, context):
+        objs = [o for o in context.selected_objects if o.type == "MESH"]
+        if not objs:
+            logger.error("请先选中左右成对的网格")
+            return {"CANCELLED"}
+        result = toolset_ops.auto_name_lr(
+            objs, self.base_name, axis=self.axis, left_side=self.left_side)
+        for k, v in result.items():
+            logger.info("%s → %s" % (k, v))
+        return {"FINISHED"}
+
+
+class AFR_OT_ExportNameManifest(bpy.types.Operator, ExportHelper):
+    bl_idname = "afr.export_name_manifest"
+    bl_label = "导出命名清单 (CSV)"
+    bl_description = ("把所有网格的 对象名,部件名 导出为 CSV，供人工/MCP "
+                      "填写中文部件名后导回（逼近 after.zip 命名契约）")
+    bl_options = {"REGISTER"}
+    filename_ext = ".csv"
+    filter_glob: bpy.props.StringProperty(default="*.csv", options={"HIDDEN"})
+
+    def execute(self, context):
+        import csv
+        if not self.filepath.lower().endswith(".csv"):
+            self.filepath += ".csv"
+        rows = []
+        for o in context.scene.objects:
+            if o.type == "MESH":
+                rows.append([o.name, o.get("afr_part_name") or ""])
+        try:
+            with open(self.filepath, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.writer(f)
+                w.writerow(["object", "part_name"])
+                w.writerows(rows)
+        except Exception as e:
+            logger.error("导出清单失败: %s" % e)
+            return {"CANCELLED"}
+        logger.info("已导出命名清单 %d 行 → %s" % (len(rows), self.filepath))
+        return {"FINISHED"}
+
+
+class AFR_OT_ImportNameManifest(bpy.types.Operator, ImportHelper):
+    bl_idname = "afr.import_name_manifest"
+    bl_label = "导入命名清单 (CSV)"
+    bl_description = "按 CSV（object,part_name）回填部件的可打印名 afr_part_name"
+    bl_options = {"REGISTER", "UNDO"}
+    filename_ext = ".csv"
+    filter_glob: bpy.props.StringProperty(default="*.csv", options={"HIDDEN"})
+
+    def execute(self, context):
+        import csv
+        objs = {o.name: o for o in context.scene.objects if o.type == "MESH"}
+        n = 0
+        try:
+            with open(self.filepath, newline="", encoding="utf-8-sig") as f:
+                rd = csv.DictReader(f)
+                for row in rd:
+                    oname = (row.get("object") or "").strip()
+                    pname = (row.get("part_name") or "").strip()
+                    if not oname or oname not in objs:
+                        continue
+                    if pname:
+                        toolset_ops.name_part(objs[oname], pname)
+                        n += 1
+        except Exception as e:
+            logger.error("导入清单失败: %s" % e)
+            return {"CANCELLED"}
+        logger.info("已按清单命名 %d 个部件" % n)
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
 # ComfyUI texturing (AI 贴图)
 # ---------------------------------------------------------------------------
 class AFR_OT_ComfyUITexture(bpy.types.Operator):
@@ -1676,5 +1797,9 @@ CLASSES = (
     AFR_OT_ToolsetSymmetry,
     AFR_OT_ToolsetWatertight,
     AFR_OT_ToolsetStats,
+    AFR_OT_NamePart,
+    AFR_OT_AutoNameLR,
+    AFR_OT_ExportNameManifest,
+    AFR_OT_ImportNameManifest,
     AFR_OT_ComfyUITexture,
 )
