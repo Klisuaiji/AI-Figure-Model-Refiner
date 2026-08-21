@@ -1,3 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Klisuaiji (AI Figure Model Refiner)
+# This file is part of the AI Figure Model Refiner (AFR) addon.
+# AFR is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your
+# option) any later version.
+#
+# AFR is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
+# for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with AFR. If not, see <https://www.gnu.org/licenses/>.
 """Hair refinement operations.
 
 Phase 5 features:
@@ -50,7 +65,12 @@ def extract_part(obj, label_id, new_name=None):
         for f in keep_faces:
             new_verts = []
             for v in f.verts:
-                key = id(v)
+                # NOTE: bmesh re-creates a fresh Python proxy on every
+                # `f.verts` access, so `id(v)` is NOT stable across faces —
+                # two faces sharing an edge would get different proxy objects
+                # and every triangle's verts would be duplicated. Use the
+                # stable bmesh element index instead.
+                key = v.index
                 if key not in vert_map:
                     vert_map[key] = out.verts.new(v.co)
                 new_verts.append(vert_map[key])
@@ -239,20 +259,20 @@ def generate_hair_curves(scene, params):
 
 
 def curves_to_mesh(curves_obj, radius=0.04, segments=4, taper=0.7):
-    """Convert a Curves object to a watertight Mesh by sweeping a circle
-    along each spline with radius tapering toward the tip."""
-    if curves_obj is None or curves_obj.type != "CURVES" and curves_obj.type != "CURVE":
-        # bpy 4.x renamed CURVE -> CURVES for hair; accept both
-        if curves_obj.type not in ("CURVE", "CURVES"):
-            raise ValueError("expected CURVE/CURVES object, got %s" % curves_obj.type)
-    # assign bevel params then convert
+    """Convert a CURVE object to a watertight MESH by sweeping a circular
+    cross-section along each spline (capped ends → printable tube)."""
+    if curves_obj is None or curves_obj.type not in ("CURVE", "CURVES"):
+        got = curves_obj.type if curves_obj is not None else None
+        raise ValueError("expected CURVE/CURVES object, got %s" % got)
     cd = curves_obj.data
     cd.bevel_depth = radius
-    cd.bevel_resolution = segments
+    cd.bevel_resolution = max(0, int(segments))
     cd.fill_mode = "FULL"
-    # use bpy.ops to convert
-    bpy.context.view_layer.objects.active = curves_obj
-    bpy.ops.object.select_group_action = None
+    cd.use_fill_caps = True  # cap the open ends so each strand is watertight
+    # convert requires OBJECT mode with the curve active + selected
+    bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.ops.object.select_all(action="DESELECT")
     curves_obj.select_set(True)
+    bpy.context.view_layer.objects.active = curves_obj
     bpy.ops.object.convert(target="MESH")
     return curves_obj  # now a MESH

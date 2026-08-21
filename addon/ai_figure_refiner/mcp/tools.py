@@ -1,3 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Klisuaiji (AI Figure Model Refiner)
+# This file is part of the AI Figure Model Refiner (AFR) addon.
+# AFR is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your
+# option) any later version.
+#
+# AFR is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
+# for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with AFR. If not, see <https://www.gnu.org/licenses/>.
 """Domain tools exposed to the AI agent over MCP.
 
 Every function is *pure* on the server side: it only constructs a snippet
@@ -91,8 +106,77 @@ def printability(backend: BlenderBackend, object_name: str | None = None,
 # ---------------------------------------------------------------------------
 # Semantic labelling
 # ---------------------------------------------------------------------------
+def get_reference_images(backend: BlenderBackend) -> dict:
+    """Return the 4 reference-image slots (FRONT/BACK/LEFT/RIGHT) with their
+    file paths, loaded status and whether the mandatory FRONT photo is set.
+    The multimodal AI agent reads these images to assist part labelling."""
+    body = (
+        "from ai_figure_refiner.reference import views as ref_views\n"
+        "sc = bpy.context.scene\n"
+        "ref_views.ensure_ref_state(sc)\n"
+        "views = {}\n"
+        "for v in sc.afr_ref_views:\n"
+        "    views[v.name] = {'path': v.image_path or '',\n"
+        "                     'loaded': bool(v.image_path),\n"
+        "                     'camera': v.camera_obj or ''}\n"
+        "front_ok = bool(views.get('FRONT', {}).get('loaded'))\n"
+        "AFR_RESULT = {'views': views,\n"
+        "             'front_required': True,\n"
+        "             'front_present': front_ok,\n"
+        "             'ready_for_multimodal': front_ok}\n"
+    )
+    return _run(backend, body)
+
+
+def set_part_labels(backend: BlenderBackend, object_name: str | None,
+                    labels: list) -> dict:
+    """Write a per-vertex part-label array (list of ints, see PART_ID:
+    0=UNLABELED 1=HAIR 2=HEAD 3=BODY 4=FABRIC 5=BASE) back to the object.
+    Used by the multimodal agent to commit vision-derived labels."""
+    body = (
+        "from collections import Counter\n"
+        "from ai_figure_refiner.semantic import parts as sem_parts\n"
+        "obj = _get_object(%r)\n"
+        "if obj is None:\n"
+        "    AFR_RESULT = {'error': 'no source mesh object'}\n"
+        "else:\n"
+        "    labels = %r\n"
+        "    sem_parts.ensure_part_attribute(obj)\n"
+        "    sem_parts.set_label_array(obj, labels)\n"
+        "    cnt = Counter(sem_parts.ID_PART[l] for l in labels)\n"
+        "    AFR_RESULT = {'object': obj.name, 'vertices': len(labels),\n"
+        "                  'counts': dict(cnt.most_common())}\n"
+    ) % (object_name, labels)
+    return _run(backend, body)
+
+
 def label_parts(backend: BlenderBackend, object_name: str | None = None,
                 method: str = "heuristics") -> dict:
+    if method in ("vision", "multimodal"):
+        # Front photo is MANDATORY for multimodal-assisted labeling.
+        body = (
+            "from ai_figure_refiner.reference import views as ref_views\n"
+            "sc = bpy.context.scene\n"
+            "ref_views.ensure_ref_state(sc)\n"
+            "slot = ref_views.get_view_slot(sc, 'FRONT')\n"
+            "if slot is None or not slot.image_path:\n"
+            "    AFR_RESULT = {'error': '正面参考图未上传（多模态标注必需）：请先在 N 面板上传 FRONT 参考图'}\n"
+            "else:\n"
+            "    from collections import Counter\n"
+            "    from ai_figure_refiner.semantic import parts as sem_parts\n"
+            "    obj = _get_object(%r)\n"
+            "    if obj is None:\n"
+            "        AFR_RESULT = {'error': 'no source mesh object'}\n"
+            "    else:\n"
+            "        sem_parts.ensure_part_attribute(obj)\n"
+            "        labels = sem_parts.apply_heuristics(obj)\n"
+            "        cnt = Counter(sem_parts.ID_PART[l] for l in labels)\n"
+            "        AFR_RESULT = {'vertices': len(labels),\n"
+            "                      'counts': dict(cnt.most_common()),\n"
+            "                      'front_image': slot.image_path,\n"
+            "                      'method': 'heuristics+front_photo'}\n"
+        ) % (object_name,)
+        return _run(backend, body)
     body = (
         "from collections import Counter\n"
         "from ai_figure_refiner.semantic import parts as sem_parts\n"

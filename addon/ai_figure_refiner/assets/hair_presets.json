@@ -1,0 +1,29 @@
+{
+  "presets": [
+    {
+      "name": "直长发",
+      "desc": "顺直下垂、发梢略收",
+      "params": {"scalp_radius": 0.35, "count": 320, "length_min": 1.5, "length_max": 2.6, "curl": 0.05, "noise": 0.12, "taper": 1.8, "radius": 0.04}
+    },
+    {
+      "name": "卷发",
+      "desc": "明显卷曲、蓬松",
+      "params": {"scalp_radius": 0.38, "count": 360, "length_min": 1.0, "length_max": 1.9, "curl": 0.72, "noise": 0.3, "taper": 1.2, "radius": 0.045}
+    },
+    {
+      "name": "短发",
+      "desc": "齐颈短发",
+      "params": {"scalp_radius": 0.34, "count": 260, "length_min": 0.4, "length_max": 0.85, "curl": 0.22, "noise": 0.28, "taper": 1.5, "radius": 0.045}
+    },
+    {
+      "name": "双马尾",
+      "desc": "两束长马尾、低卷曲",
+      "params": {"scalp_radius": 0.22, "count": 220, "length_min": 1.8, "length_max": 2.8, "curl": 0.12, "noise": 0.1, "taper": 2.0, "radius": 0.05}
+    },
+    {
+      "name": "飘逸长发",
+      "desc": "中卷曲、带噪声飘动",
+      "params": {"scalp_radius": 0.36, "count": 300, "length_min": 1.2, "length_max": 2.4, "curl": 0.4, "noise": 0.42, "taper": 1.6, "radius": 0.042}
+    }
+  ]
+}

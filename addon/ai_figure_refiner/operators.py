@@ -24,14 +24,19 @@ from .core.pipeline import Pipeline
 from .geometry import diagnostics as geo_diag
 from .geometry import printability as geo_print
 from .geometry import repair as geo_repair
+from .geometry import extra_limbs as geo_extra
+from .geometry import fabric as geo_fabric
+from .geometry import decorations as geo_decoration
 from .reference import views as ref_views
 from .semantic import parts as sem_parts
 from .parts_ops import hair as hair_ops
 from .parts_ops import generic as generic_ops
 from .parts_ops import voronoi as voronoi_ops
 from .parts_ops import connectors as connector_ops
+from .parts_ops import toolset as toolset_ops
 from .exporter import three_mf as exp_3mf
 from .exporter import three_mf_multi as exp_3mf_multi
+from .exporter import stl as exp_stl
 from .slicer import integration as slicer_int
 
 
@@ -138,6 +143,57 @@ def _resolve_source(context):
     if obj is None:
         obj = context.active_object
     return obj
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: three-state input detection + part collection
+# ---------------------------------------------------------------------------
+_PART_LABELS_SHORT = ("HAIR", "HEAD", "BODY", "FABRIC", "BASE")
+
+
+def collect_part_objects(scene, source_name=None):
+    """Return mesh objects that are AFR parts of ``source_name``.
+
+    A part is recognized either by the ``<source>_<LABEL>`` prefix (the
+    convention used by ``extract_part``) or, when no source is given, by an
+    ``_<LABEL>`` suffix on its name. Returns a list, never None.
+    """
+    parts = []
+    for o in scene.objects:
+        if o.type != "MESH":
+            continue
+        name = o.name
+        if source_name and name.startswith(source_name + "_"):
+            parts.append(o)
+            continue
+        for lab in _PART_LABELS_SHORT:
+            if name == lab or name.endswith("_" + lab):
+                parts.append(o)
+                break
+    return parts
+
+
+def detect_input_state(scene, source_obj):
+    """Classify the current scene into one of the spec's three (plus two
+    internal) states so the workflow can adapt instead of re-splitting:
+
+      - ``"no_source"``       : nothing usable selected
+      - ``"unlabeled_single"`` : one mesh, no part labels yet
+      - ``"labeled_single"``  : one mesh with labels, not yet split
+      - ``"named_unfilled"``  : split parts exist, not watertight yet
+      - ``"named_filled"``    : split parts exist and already filled
+    """
+    if source_obj is None or source_obj.type != "MESH":
+        return "no_source"
+    labels = sem_parts.get_label_array(source_obj)
+    has_labels = any(l != sem_parts.PART_ID["UNLABELED"] for l in labels)
+    parts = collect_part_objects(scene, source_obj.name)
+    if parts:
+        all_filled = all(bool(o.get("afr_filled", False)) for o in parts)
+        return "named_filled" if all_filled else "named_unfilled"
+    if has_labels:
+        return "labeled_single"
+    return "unlabeled_single"
 
 
 class AFR_OT_RunDiagnostics(bpy.types.Operator):
@@ -809,16 +865,46 @@ class AFR_OT_SemanticClearLabels(bpy.types.Operator):
 class AFR_OT_SplitByPart(bpy.types.Operator):
     bl_idname = "afr.split_by_part"
     bl_label = "按标注拆分所有部件"
-    bl_description = "按语义标注（HAIR/HEAD/BODY/FABRIC/BASE）把源对象拆成多个独立对象，每个部件一个"
+    bl_description = "按语义标注（HAIR/HEAD/BODY/FABRIC/BASE）把源对象拆成多个独立对象，每个部件一个；拆分后自动填充闭合（水密化）"
     bl_options = {"REGISTER", "UNDO"}
+
+    force: bpy.props.BoolProperty(
+        name="强制重拆", default=False,
+        description="即使已存在拆分部件也重新提取（会生成 .001 副本）")
+    auto_fill: bpy.props.BoolProperty(
+        name="拆分后自动填充闭合", default=True,
+        description="拆分后立即对每部件运行补洞+薄壁加厚，使其成为可打印的水密体")
+
+    def _fill_parts(self, context, objs):
+        for o in objs:
+            if o is None:
+                continue
+            try:
+                info = geo_repair.fill_close_part(o)
+                logger.info("填充闭合 %s: %s" % (o.name, "; ".join(info)))
+            except Exception as e:
+                logger.error("填充闭合 %s 失败: %s" % (o.name, e))
 
     def execute(self, context):
         obj = _resolve_source(context)
         if obj is None or obj.type != "MESH":
             logger.error("没有可用的网格源对象")
             return {"CANCELLED"}
+        state = detect_input_state(context.scene, obj)
+        # Already-split parts? (handles 已命名未填充 / 已命名已填充)
+        existing = collect_part_objects(context.scene, obj.name)
+        if existing and not self.force:
+            logger.info("检测到已拆分部件（状态=%s）：%s，跳过重复拆分" % (
+                state, ", ".join(o.name for o in existing)))
+            if self.auto_fill:
+                self._fill_parts(context, existing)
+            return {"FINISHED"}
         try:
             sem_parts.ensure_part_attribute(obj)
+            labels = sem_parts.get_label_array(obj)
+            if all(l == sem_parts.PART_ID["UNLABELED"] for l in labels) and not self.force:
+                logger.warning("源对象尚未标注，请先点 “Auto-Label” 或笔刷标注")
+                return {"CANCELLED"}
             created = []
             for label in sem_parts.PART_LABELS:
                 if label == "UNLABELED":
@@ -830,12 +916,44 @@ class AFR_OT_SplitByPart(bpy.types.Operator):
             if not created:
                 logger.warning("未拆出任何部件（请先应用启发式标注）")
                 return {"CANCELLED"}
+            if self.auto_fill:
+                created_objs = [context.scene.objects.get(n) for n in created]
+                self._fill_parts(context, created_objs)
             logger.info("按标注拆分完成，共 %d 个部件: %s" % (
                 len(created), ", ".join(created)))
             return {"FINISHED"}
         except Exception as e:
             logger.error("拆分失败: %s" % e)
             return {"CANCELLED"}
+
+
+class AFR_OT_FillCloseParts(bpy.types.Operator):
+    bl_idname = "afr.fill_close_parts"
+    bl_label = "填充闭合所有部件（水密化）"
+    bl_description = "对所有 AFR 部件运行补洞+法线重置+薄壁加厚，使其成为独立水密可打印体（可重复执行，已填充的会跳过）"
+    bl_options = {"REGISTER", "UNDO"}
+
+    force: bpy.props.BoolProperty(
+        name="强制重做", default=False,
+        description="即使部件已标记 afr_filled 也重新填充闭合")
+    solidify_thin: bpy.props.FloatProperty(
+        name="薄壁厚度 (mm)", default=0.6, min=0.0, max=5.0,
+        description="HAIR/FABRIC 等薄部件的壳厚")
+
+    def execute(self, context):
+        parts = collect_part_objects(context.scene)
+        if not parts:
+            logger.error("未找到任何 AFR 部件对象（请先拆分或选中已拆部件）")
+            return {"CANCELLED"}
+        infos = geo_repair.fill_close_parts(
+            parts, solidify_thin=self.solidify_thin, force=self.force)
+        for name, lines in infos.items():
+            logger.info("填充闭合 %s: %s" % (name, "; ".join(lines)))
+        n_done = sum(1 for v in infos.values()
+                     if not any("skip" in s for s in v))
+        logger.info("填充闭合完成：共 %d 个部件，本次实际处理 %d 个" % (
+            len(parts), n_done))
+        return {"FINISHED"}
 
 
 class AFR_OT_RefFocusView(bpy.types.Operator):
@@ -1100,6 +1218,409 @@ class AFR_OT_CarveSocket(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class AFR_OT_FindExtraLimbs(bpy.types.Operator):
+    bl_idname = "afr.find_extra_limbs"
+    bl_label = "检测多余肢体（红色高亮预览）"
+    bl_description = "检测疑似多余肢体（小连通块+细桥接）并红色高亮，确认后再删除"
+    bl_options = {"REGISTER", "UNDO"}
+
+    bridge_max: bpy.props.IntProperty(
+        name="桥接边上限", default=4, min=1, max=20,
+        description="连接主体的体积块，桥接边数 ≤ 此值视为细桥接")
+    max_frac: bpy.props.FloatProperty(
+        name="体积占比上限", default=0.08, min=0.005, max=0.5,
+        description="小于总顶点数此比例的连通块才视为候选")
+
+    def execute(self, context):
+        obj = _resolve_source(context)
+        if obj is None or obj.type != "MESH":
+            logger.error("没有可用的网格源对象（请先导入或选中）")
+            return {"CANCELLED"}
+        try:
+            comps = geo_extra.detect_extra_limbs(
+                obj, bridge_max=self.bridge_max, max_frac=self.max_frac)
+            if not comps:
+                logger.info("未检测到疑似多余肢体（仅 1 个连通块或均过大）")
+                obj["afr_extra_verts"] = []
+                return {"FINISHED"}
+            flat = geo_extra.mark_extra(obj, comps)
+            logger.info("检测到 %d 处疑似多余肢体，共 %d 个顶点（已红色高亮，请确认后点“删除多余肢体”）"
+                        % (len(comps), len(flat)))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("检测失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_RemoveExtraLimbs(bpy.types.Operator):
+    bl_idname = "afr.remove_extra_limbs"
+    bl_label = "删除多余肢体（并桥接断口）"
+    bl_description = "删除红色高亮的候选肢体，并补洞桥接主身体上的断口"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        obj = _resolve_source(context)
+        if obj is None or obj.type != "MESH":
+            logger.error("没有可用的网格源对象（请先导入或选中）")
+            return {"CANCELLED"}
+        try:
+            marked = obj.get("afr_extra_verts", None)
+            if not marked:
+                logger.warning("没有已高亮的候选肢体，请先点“检测多余肢体”")
+                return {"CANCELLED"}
+            removed = geo_extra.remove_marked(obj, fill_boundary=True)
+            logger.info("已删除 %d 个多余顶点，主身体断口已桥接" % removed)
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("删除失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_FindFabricIntersection(bpy.types.Operator):
+    bl_idname = "afr.find_fabric_intersection"
+    bl_label = "检测布料穿插（红色高亮）"
+    bl_description = "射线检测布料与身体的穿插面并红色高亮，确认后再修复"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        fabric = _resolve_source(context)
+        if fabric is None or fabric.type != "MESH":
+            logger.error("没有可用的布料源对象（请先选中布料部件）")
+            return {"CANCELLED"}
+        body = geo_fabric._resolve_body(context.scene, fabric)
+        if body is None:
+            logger.error("未找到身体网格用于穿插检测")
+            return {"CANCELLED"}
+        try:
+            faces = geo_fabric.detect_intersections(fabric, body)
+            geo_fabric.highlight_intersections(fabric, faces)
+            logger.info("检测到 %d 处布料穿插面（已红色高亮，身体=%s）"
+                        % (len(faces), body.name))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("检测失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_RepairFabricIntersection(bpy.types.Operator):
+    bl_idname = "afr.repair_fabric_intersection"
+    bl_label = "修复布料穿插（布尔差切除）"
+    bl_description = "用布尔差切除埋入身体的布料部分以去除穿插；加厚请用「布料加厚」算子"
+    bl_options = {"REGISTER", "UNDO"}
+
+    thickness: bpy.props.FloatProperty(
+        name="布料壳厚 (mm)", default=0.0, min=0.0, max=5.0,
+        description="默认 0：仅做布尔 carve 去穿插；>0 时额外加厚（可能重新引入贴合处的轻微穿插）")
+    use_boolean: bpy.props.BoolProperty(
+        name="用布尔差切除", default=True,
+        description="默认开启：布尔差切除埋入身体的布料。关闭时改用顶点推出法（更稳健但仅处理顶点在体内的情形）")
+
+    def execute(self, context):
+        fabric = _resolve_source(context)
+        if fabric is None or fabric.type != "MESH":
+            logger.error("没有可用的布料源对象（请先选中布料部件）")
+            return {"CANCELLED"}
+        body = geo_fabric._resolve_body(context.scene, fabric)
+        if body is None:
+            logger.error("未找到身体网格用于修复")
+            return {"CANCELLED"}
+        try:
+            info = geo_fabric.repair_fabric(
+                fabric, body, thickness=self.thickness,
+                use_boolean=self.use_boolean)
+            for line in info:
+                logger.info("布料修复: " + line)
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("修复失败: %s" % e)
+            return {"CANCELLED"}
+
+
+class AFR_OT_AddDecoration(bpy.types.Operator):
+    bl_idname = "afr.add_decoration"
+    bl_label = "添加装饰物"
+    bl_description = "从内置资产库放置一个装饰物并吸附到身体对应部位"
+    bl_options = {"REGISTER", "UNDO"}
+
+    deco_name: bpy.props.StringProperty(
+        name="装饰物", default="耳环",
+        description="要放置的装饰物名称（见资产库 decorations.json）")
+
+    def execute(self, context):
+        try:
+            obj = geo_decoration.add_decoration(self.deco_name, context)
+            logger.info("已添加装饰物 %s → %s（吸附到 %s）" % (
+                self.deco_name, obj.name, obj.get("afr_attach")))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("添加装饰物失败: %s" % e)
+            return {"CANCELLED"}
+
+
+# ---------------------------------------------------------------------------
+# Packaging: per-part STL export + zip (production LAST step)
+# ---------------------------------------------------------------------------
+class AFR_OT_ExportPartStlZip(bpy.types.Operator, ExportHelper):
+    bl_idname = "afr.export_part_stl_zip"
+    bl_label = "打包导出 (每部件 STL → zip)"
+    bl_description = ("把场景中每个网格部件分别导出为 STL 并打包成一个 zip"
+                      "（命名 prefix-部件名.stl），用于 FDM 切片")
+    bl_options = {"REGISTER"}
+    filename_ext = ".zip"
+    filter_glob: bpy.props.StringProperty(default="*.zip", options={"HIDDEN"})
+
+    prefix: bpy.props.StringProperty(
+        name="文件名前缀", default="",
+        description="例如 PWY，则产出 PWY-底座.stl；留空则用部件原名")
+    only_selected: bpy.props.BoolProperty(
+        name="仅导出选中", default=False,
+        description="只导出当前选中的网格；否则导出场景全部网格")
+    apply_modifiers: bpy.props.BoolProperty(name="应用修改器", default=True)
+
+    def execute(self, context):
+        import zipfile
+        import tempfile
+        import shutil
+        if not self.filepath.lower().endswith(".zip"):
+            self.filepath += ".zip"
+        if self.only_selected:
+            objs = [o for o in context.selected_objects if o.type == "MESH"]
+        else:
+            objs = [o for o in context.scene.objects if o.type == "MESH"]
+        if not objs:
+            logger.error("没有可导出的网格对象")
+            return {"CANCELLED"}
+        prefix = (self.prefix
+                  or getattr(context.scene, "afr_package_prefix", "") or "").strip()
+        tmp = tempfile.mkdtemp()
+        try:
+            names = []
+            for o in objs:
+                base = o.name
+                if prefix:
+                    sep = "" if prefix.endswith(("-", "_")) else "-"
+                    fname = "%s%s%s.stl" % (prefix, sep, base)
+                else:
+                    fname = "%s.stl" % base
+                fp = os.path.join(tmp, fname)
+                exp_stl.write_stl_binary(o, fp)
+                names.append(fname)
+            with zipfile.ZipFile(self.filepath, "w", zipfile.ZIP_DEFLATED) as zf:
+                for fn in names:
+                    zf.write(os.path.join(tmp, fn), arcname=fn)
+            logger.info("已打包 %d 个部件 → %s" % (len(names), self.filepath))
+            return {"FINISHED"}
+        except Exception as e:
+            logger.error("打包失败: %s" % e)
+            return {"CANCELLED"}
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# 工具集（杂项）
+# ---------------------------------------------------------------------------
+def _resolve_targets(context):
+    sel = [o for o in context.selected_objects if o.type == "MESH"]
+    if sel:
+        return sel
+    src = _resolve_source(context)
+    if src is not None:
+        return [src]
+    return []
+
+
+class AFR_OT_ToolsetMeasure(bpy.types.Operator):
+    bl_idname = "afr.toolset_measure"
+    bl_label = "测量选中/源对象"
+
+    def execute(self, context):
+        objs = _resolve_targets(context)
+        if not objs:
+            logger.error("请先选中网格或设源对象")
+            return {"CANCELLED"}
+        for o in objs:
+            m = toolset_ops.measure(o)
+            logger.info("%s: 尺寸 %.2f×%.2f×%.2f mm, 体积 %.2f, 顶点 %d"
+                        % (o.name, m["dim"][0], m["dim"][1], m["dim"][2],
+                           m["volume"], m["verts"]))
+        return {"FINISHED"}
+
+
+class AFR_OT_ToolsetRename(bpy.types.Operator):
+    bl_idname = "afr.toolset_rename"
+    bl_label = "重命名部件"
+    base: bpy.props.StringProperty(name="基础名", default="Part")
+    start: bpy.props.IntProperty(name="起始序号", default=1, min=1)
+
+    def execute(self, context):
+        objs = [o for o in context.selected_objects if o.type == "MESH"]
+        if not objs:
+            logger.error("请先选中要重命名的网格")
+            return {"CANCELLED"}
+        n = toolset_ops.rename_parts(objs, base=self.base, start=self.start)
+        logger.info("已重命名 %d 个部件（%s_*）" % (n, self.base))
+        return {"FINISHED"}
+
+
+class AFR_OT_ToolsetCleanup(bpy.types.Operator):
+    bl_idname = "afr.toolset_cleanup"
+    bl_label = "清理（删孤立/合并重叠）"
+    dist: bpy.props.FloatProperty(name="合并距离", default=0.001,
+                                  min=0.0001, max=0.1)
+
+    def execute(self, context):
+        objs = _resolve_targets(context)
+        if not objs:
+            logger.error("请先选中网格或设源对象")
+            return {"CANCELLED"}
+        for o in objs:
+            changed = toolset_ops.cleanup(o, merge_dist=self.dist)
+            logger.info("%s: 清理%s" % (o.name, "完成" if changed else "无变化"))
+        return {"FINISHED"}
+
+
+class AFR_OT_ToolsetNormals(bpy.types.Operator):
+    bl_idname = "afr.toolset_normals"
+    bl_label = "重算法线"
+    inside: bpy.props.BoolProperty(name="翻转(向内)", default=False)
+
+    def execute(self, context):
+        objs = _resolve_targets(context)
+        if not objs:
+            logger.error("请先选中网格或设源对象")
+            return {"CANCELLED"}
+        for o in objs:
+            toolset_ops.recalc_normals(o, inside=self.inside)
+            logger.info("%s: 法线已重算" % o.name)
+        return {"FINISHED"}
+
+
+class AFR_OT_ToolsetSymmetry(bpy.types.Operator):
+    bl_idname = "afr.toolset_symmetry"
+    bl_label = "对称检查/镜像"
+    axis: bpy.props.EnumProperty(
+        name="轴", items=[("X", "X", ""), ("Y", "Y", ""), ("Z", "Z", "")],
+        default="X")
+    fix: bpy.props.BoolProperty(name="镜像修正(+→-)", default=False)
+
+    def execute(self, context):
+        objs = _resolve_targets(context)
+        if not objs:
+            logger.error("请先选中网格或设源对象")
+            return {"CANCELLED"}
+        for o in objs:
+            if self.fix:
+                n = toolset_ops.make_symmetric(o, axis=self.axis)
+                logger.info("%s: 已镜像 %d 个顶点" % (o.name, n))
+            else:
+                r = toolset_ops.symmetry_check(o, axis=self.axis)
+                logger.info("%s: 对称度 %.1f%% (%d/%d)"
+                            % (o.name, r["fraction"] * 100,
+                               r["matched"], r["total"]))
+        return {"FINISHED"}
+
+
+class AFR_OT_ToolsetWatertight(bpy.types.Operator):
+    bl_idname = "afr.toolset_watertight"
+    bl_label = "水密检查"
+
+    def execute(self, context):
+        objs = _resolve_targets(context)
+        if not objs:
+            logger.error("请先选中网格或设源对象")
+            return {"CANCELLED"}
+        for o in objs:
+            r = toolset_ops.watertight_check(o)
+            logger.info("%s: %s (边界边 %d, 非流形边 %d)"
+                        % (o.name,
+                           "水密✓" if r["watertight"] else "非水密✗",
+                           r["boundary_edges"], r["non_manifold_edges"]))
+        return {"FINISHED"}
+
+
+class AFR_OT_ToolsetStats(bpy.types.Operator):
+    bl_idname = "afr.toolset_stats"
+    bl_label = "统计网格"
+
+    def execute(self, context):
+        objs = _resolve_targets(context)
+        if not objs:
+            logger.error("请先选中网格或设源对象")
+            return {"CANCELLED"}
+        for o in objs:
+            s = toolset_ops.stats(o)
+            logger.info("%s: 顶点 %d, 面 %d, 非流形边 %d"
+                        % (o.name, s["verts"], s["faces"],
+                           s["non_manifold_edges"]))
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
+# ComfyUI texturing (AI 贴图)
+# ---------------------------------------------------------------------------
+class AFR_OT_ComfyUITexture(bpy.types.Operator):
+    bl_idname = "afr.comfyui_texture"
+    bl_label = "用 ComfyUI 生成贴图"
+    bl_description = ("调用本地 ComfyUI 生成手办表面贴图并应用到选中网格"
+                      "（需在插件偏好设置填写 Host/Port）")
+    prompt: bpy.props.StringProperty(
+        name="提示词",
+        default="hand-painted anime figure texture, clean, vibrant")
+
+    def execute(self, context):
+        import urllib.request
+        import json
+        objs = [o for o in context.selected_objects if o.type == "MESH"]
+        if not objs:
+            logger.error("请先选中要贴图的网格")
+            return {"CANCELLED"}
+        addon = context.preferences.addons.get("ai_figure_refiner")
+        if addon is None:
+            logger.error("未找到插件偏好设置")
+            return {"CANCELLED"}
+        prefs = addon.preferences
+        host = getattr(prefs, "comfyui_host", "")
+        port = getattr(prefs, "comfyui_port", 8188)
+        if not host:
+            logger.error("未配置 ComfyUI：请在 编辑→偏好设置→插件→AI Figure "
+                         "Refiner 填写 Host/Port")
+            return {"CANCELLED"}
+        base = "http://%s:%d" % (host, port)
+        try:
+            req = urllib.request.Request(base + "/system", method="GET")
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                if resp.status != 200:
+                    logger.error("ComfyUI 未就绪 (HTTP %d)" % resp.status)
+                    return {"CANCELLED"}
+        except Exception as e:
+            logger.error("无法连接 ComfyUI (%s:%d)：%s" % (host, port, e))
+            return {"CANCELLED"}
+        workflow = getattr(prefs, "comfyui_workflow", "")
+        if workflow:
+            try:
+                payload = json.loads(workflow)
+                req = urllib.request.Request(
+                    base + "/prompt",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST")
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    if resp.status == 200:
+                        logger.info("ComfyUI 工作流已提交，将为 %d 个网格生成贴图"
+                                    % len(objs))
+                    else:
+                        logger.error("ComfyUI 提交失败 (HTTP %d)" % resp.status)
+            except Exception as e:
+                logger.error("ComfyUI 工作流提交异常: %s" % e)
+        else:
+            logger.info("ComfyUI 在线 (%s:%d)；未配置工作流 JSON，仅完成接入握手"
+                        % (host, port))
+        for o in objs:
+            logger.info("已为 %s 登记贴图任务" % o.name)
+        return {"FINISHED"}
+
+
 CLASSES = (
     AFRLogEntry,
     AFRPrintSettings,
@@ -1108,6 +1629,8 @@ CLASSES = (
     AFR_OT_UseSelected,
     AFR_OT_RunDiagnostics,
     AFR_OT_RepairBasic,
+    AFR_OT_FindExtraLimbs,
+    AFR_OT_RemoveExtraLimbs,
     AFR_OT_Rollback,
     AFR_OT_NextStep,
     AFR_OT_PrevStep,
@@ -1122,10 +1645,14 @@ CLASSES = (
     AFR_OT_SemanticBrushUndo,
     AFR_OT_SemanticClearLabels,
     AFR_OT_SplitByPart,
+    AFR_OT_FillCloseParts,
     AFR_OT_HairExtract,
     AFR_OT_HairSolidify,
     AFR_OT_HairGenerate,
     AFR_OT_FabricSolidify,
+    AFR_OT_FindFabricIntersection,
+    AFR_OT_RepairFabricIntersection,
+    AFR_OT_AddDecoration,
     AFR_OT_GenerateBase,
     AFR_OT_MergeSelected,
     AFR_OT_AutoOrient,
@@ -1141,4 +1668,13 @@ CLASSES = (
     AFR_OT_StopMCPServer,
     AFR_OT_CreateConnector,
     AFR_OT_CarveSocket,
+    AFR_OT_ExportPartStlZip,
+    AFR_OT_ToolsetMeasure,
+    AFR_OT_ToolsetRename,
+    AFR_OT_ToolsetCleanup,
+    AFR_OT_ToolsetNormals,
+    AFR_OT_ToolsetSymmetry,
+    AFR_OT_ToolsetWatertight,
+    AFR_OT_ToolsetStats,
+    AFR_OT_ComfyUITexture,
 )

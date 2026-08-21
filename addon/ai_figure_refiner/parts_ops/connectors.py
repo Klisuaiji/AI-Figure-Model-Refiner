@@ -1,3 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Klisuaiji (AI Figure Model Refiner)
+# This file is part of the AI Figure Model Refiner (AFR) addon.
+# AFR is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your
+# option) any later version.
+#
+# AFR is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
+# for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with AFR. If not, see <https://www.gnu.org/licenses/>.
 """Connector / joint generation for figure assembly (Phase 10+).
 
 Generates the *interlocking convex/concave parts* (凹凸连接件) a 3D-printed
@@ -12,7 +27,7 @@ figure needs so its split pieces can be assembled:
                    for the optional carve path). For strong flat-interface splits.
 
 Design notes (inspired by the public techniques of JointForge, Easy-Print and
-fdm_joints, re-implemented here from scratch under the project's MIT license):
+fdm_joints, re-implemented here from scratch under the project's GPL-3.0 license):
 
   * Every joint is built as a **standalone solid mesh** via ``bmesh`` /
     primitive operators. No fragile boolean is used to *build* a connector.

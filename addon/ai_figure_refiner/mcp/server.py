@@ -1,3 +1,18 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 Klisuaiji (AI Figure Model Refiner)
+# This file is part of the AI Figure Model Refiner (AFR) addon.
+# AFR is free software: you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free
+# Software Foundation, either version 3 of the License, or (at your
+# option) any later version.
+#
+# AFR is distributed in the hope that it will be useful, but WITHOUT ANY
+# WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
+# for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with AFR. If not, see <https://www.gnu.org/licenses/>.
 """AFR MCP server — the AI-agent facing surface.
 
 This module wires the :mod:`ai_figure_refiner.mcp.tools` domain functions
@@ -62,7 +77,18 @@ async def t_printability(object_name: str | None = None,
         overhang_angle_deg=overhang_angle_deg)
 
 
-@mcp.tool(name="label_parts", description="Auto-label mesh parts (HAIR/HEAD/BODY/FABRIC/BASE) via geometry heuristics. method='heuristics' or 'flood_body'.")
+@mcp.tool(name="get_reference_images", description="Return the 4 reference-image slots (FRONT/BACK/LEFT/RIGHT) with file paths, loaded status and whether the mandatory FRONT photo is present. The multimodal agent reads these images to assist part labelling.")
+async def t_get_reference_images() -> dict:
+    return tools.get_reference_images(get_default_backend())
+
+
+@mcp.tool(name="set_part_labels", description="Write a per-vertex part-label array (list of ints: 0=UNLABELED 1=HAIR 2=HEAD 3=BODY 4=FABRIC 5=BASE) to the object. Use after multimodal vision analysis of the reference images.")
+async def t_set_part_labels(object_name: str | None, labels: list) -> dict:
+    return tools.set_part_labels(get_default_backend(), object_name=object_name,
+                                 labels=labels)
+
+
+@mcp.tool(name="label_parts", description="Auto-label mesh parts (HAIR/HEAD/BODY/FABRIC/BASE). method='heuristics' (geometric) or 'flood_body'. method='vision'/'multimodal' additionally requires the FRONT reference photo (mandatory for multimodal-assisted labeling).")
 async def t_label_parts(object_name: str | None = None,
                         method: str = "heuristics") -> dict:
     return tools.label_parts(get_default_backend(), object_name=object_name,

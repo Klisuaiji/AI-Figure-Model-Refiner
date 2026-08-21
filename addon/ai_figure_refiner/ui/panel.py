@@ -45,6 +45,8 @@ import os
 import bpy
 
 from ..reference import views as ref_views
+from ..geometry import decorations as geo_decoration
+from ..parts_ops import toolset as toolset_ops
 
 _CN_VIEW = {"FRONT": "前", "BACK": "后", "LEFT": "左", "RIGHT": "右"}
 
@@ -69,6 +71,8 @@ class AFR_PT_Main(bpy.types.Panel):
                   icon="HAND")
         box.label(text="3) 展开工具执行；连接键/挖孔前 先把 3D 游标点到接缝位置",
                   icon="CURSOR")
+        box.label(text="4) 最后在「打包导出」点 打包 STL→zip 产出可切片文件",
+                  icon="PACKAGE")
 
         # --- Source object ------------------------------------------------
         box = layout.box()
@@ -130,6 +134,7 @@ class AFR_PT_Tool_Split(bpy.types.Panel):
         layout.label(text="先标注，后拆分；每个部件独立成对象", icon="GROUP_VCOL")
         layout.operator("afr.semantic_apply_heuristics", icon="AUTO")
         layout.operator("afr.split_by_part", icon="MESH_DATA")
+        layout.operator("afr.fill_close_parts", icon="MOD_SOLIDIFY")
         row = layout.row(align=True)
         op = row.operator("afr.semantic_brush_flood", text="全设为 BODY", icon="BRUSH_DATA")
         op.label_name = "BODY"
@@ -182,6 +187,9 @@ class AFR_PT_Tool_Fabric(bpy.types.Panel):
             layout.label(text="⚠ 请先在主面板点 “使用当前选中”", icon="ERROR")
         op = layout.operator("afr.fabric_solidify", icon="MOD_SOLIDIFY")
         op.thickness = ps.min_wall_thickness_mm
+        layout.separator()
+        layout.operator("afr.find_fabric_intersection", icon="VIEWZOOM")
+        layout.operator("afr.repair_fabric_intersection", icon="MOD_BOOLEAN")
 
 
 class AFR_PT_Tool_Figure(bpy.types.Panel):
@@ -202,9 +210,18 @@ class AFR_PT_Tool_Figure(bpy.types.Panel):
                 layout.label(text=line)
         layout.separator()
         layout.operator("afr.repair_basic", icon="BRUSH_DATA")
+        layout.operator("afr.find_extra_limbs", icon="X")
+        layout.operator("afr.remove_extra_limbs", icon="CANCEL")
         layout.operator("afr.auto_orient", icon="ORPHAN_DATA")
         layout.operator("afr.merge_selected", icon="GROUP")
         layout.operator("afr.rollback", icon="LOOP_BACK")
+        layout.separator()
+        layout.label(text="装饰物库（吸附到身体部位）", icon="MESH_TORUS")
+        deco_names = geo_decoration.list_decorations()
+        for d in deco_names:
+            op = layout.operator("afr.add_decoration", icon="PLUS",
+                                 text="放置 %s（%s）" % (d["name"], d["attach"]))
+            op.deco_name = d["name"]
 
 
 class AFR_PT_Tool_Print(bpy.types.Panel):
@@ -282,17 +299,24 @@ class AFR_PT_Tool_Agent(bpy.types.Panel):
         layout.label(text="  python scripts/run_mcp_server.py --transport streamable-http --port 8000")
 
 
-class AFR_PT_Tool_Export(bpy.types.Panel):
+class AFR_PT_Tool_Package(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "AI Figure Refiner"
     bl_parent_id = "AFR_PT_Main"
-    bl_label = "导出调试"
+    bl_label = "打包导出 (STL/3MF)"
     bl_options = set()   # V0.14: unfold all sub-panels by default
 
     def draw(self, context):
         sc = context.scene
         layout = self.layout
+        # --- production LAST step: per-part STL + zip ----------------------
+        box = layout.box()
+        box.label(text="打包 (每部件 STL → zip，生产最后一步)", icon="PACKAGE")
+        box.prop(sc, "afr_package_prefix", text="文件名前缀")
+        box.operator("afr.export_part_stl_zip", icon="EXPORT",
+                     text="打包 STL → zip")
+        layout.separator()
         layout.label(text="导出 (3MF)", icon="FILE_TICK")
         layout.operator("afr.export_3mf", icon="EXPORT")
         layout.operator("afr.export_multi_3mf", icon="EXPORT")
@@ -314,6 +338,69 @@ class AFR_PT_Tool_Export(bpy.types.Panel):
                          icon=icon)
 
 
+class AFR_PT_Tool_AITexture(bpy.types.Panel):
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "AI Figure Refiner"
+    bl_parent_id = "AFR_PT_Main"
+    bl_label = "AI 贴图 (ComfyUI)"
+    bl_options = set()   # V0.14: unfold all sub-panels by default
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="选中网格 → 调用本地 ComfyUI 生成贴图", icon="TEXTURE")
+        row = layout.row(align=True)
+        op = row.operator("afr.comfyui_texture", icon="PLAY", text="生成贴图")
+        layout.label(
+            text="Host/Port 在 编辑→偏好设置→插件→AI Figure Refiner",
+            icon="INFO")
+
+
+class AFR_PT_Toolset(bpy.types.Panel):
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "AI Figure Refiner"
+    bl_parent_id = "AFR_PT_Main"
+    bl_label = "工具集（杂项）"
+    bl_options = set()   # V0.14: unfold all sub-panels by default
+
+    def draw(self, context):
+        sc = context.scene
+        layout = self.layout
+        layout.label(text="零散工具：测量/清理/法线/对称/水密/统计",
+                     icon="TOOL_SETTINGS")
+        src = bpy.data.objects.get(sc.afr_source) if sc.afr_source else None
+        if src is not None and src.type == "MESH":
+            try:
+                s = toolset_ops.stats(src)
+                m = toolset_ops.measure(src)
+                wt = toolset_ops.watertight_check(src)
+                layout.label(text="源 %s: 顶点 %d / 面 %d"
+                             % (src.name, s["verts"], s["faces"]))
+                layout.label(text="尺寸 %.1f×%.1f×%.1f mm"
+                             % (m["dim"][0], m["dim"][1], m["dim"][2]))
+                layout.label(text="水密: %s (边界 %d)"
+                             % ("✓" if wt["watertight"] else "✗",
+                                wt["boundary_edges"]))
+            except Exception as e:
+                layout.label(text="统计失败: %s" % e, icon="ERROR")
+        layout.separator()
+        layout.operator("afr.toolset_measure", icon="VIEWZOOM")
+        layout.operator("afr.toolset_stats", icon="VIEWZOOM")
+        layout.operator("afr.toolset_watertight", icon="MOD_SOLIDIFY")
+        row = layout.row(align=True)
+        row.operator("afr.toolset_cleanup", icon="BRUSH_DATA")
+        row.operator("afr.toolset_normals", icon="NORMALS")
+        row = layout.row(align=True)
+        row.operator("afr.toolset_symmetry", icon="MOD_MIRROR")
+        row.operator("afr.toolset_symmetry", text="镜像修正",
+                     icon="MOD_MIRROR").fix = True
+        layout.separator()
+        box = layout.box()
+        box.label(text="重命名选中部件", icon="OUTLINER")
+        box.operator("afr.toolset_rename", icon="RENAME")
+
+
 PANELS = (
     AFR_PT_Main,
     AFR_PT_Tool_Split,
@@ -323,5 +410,7 @@ PANELS = (
     AFR_PT_Tool_Print,
     AFR_PT_Tool_Connector,
     AFR_PT_Tool_Agent,
-    AFR_PT_Tool_Export,
+    AFR_PT_Tool_AITexture,
+    AFR_PT_Tool_Package,
+    AFR_PT_Toolset,
 )

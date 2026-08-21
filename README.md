@@ -2,7 +2,7 @@
 
 > 将 AI 生成的 3D 手办模型，通过 **AI 智能体（MCP 接口）+ 几何算法 + 用户确认**，修复为可进入 FDM 3D 打印生产流程的模型。
 
-## 项目状态（V0.10 — AI 智能体 / MCP 范式 + 凹凸连接件）
+## 项目状态（V0.13 — 工具集 UI + 多模态参考图 + GPL-3.0）
 
 | Phase | 范围 | 状态 |
 |-------|------|------|
@@ -22,26 +22,38 @@
 | **V0.8** | **代码审查 + 真实 ONNX 推理骨架** | ✅ |
 | **V0.9** | **移除本地模型 → 改为 AI 智能体 MCP 接口（适配 Blender MCP）** | ✅ |
 | **V0.10** | **凹凸连接件生成（圆柱/球窝/燕尾）+ 挖孔算子 + MCP 工具** | ✅ |
+| **V0.11** | **半自动零布尔连接（凸柱 + 套筒），放弃 Boolean 求解** | ✅ |
+| **V0.12** | **工具集 UI：固定工作流 → 按需工具面板** | ✅ |
+| **V0.13** | **四视图参考图 → 多模态智能体辅助标注（正面必传）+ 协议改 GPL-3.0** | ✅ |
 
-详见 `报告.md`、`CHANGELOG.md` 与 `wiki/`。N 面板保留核心算子；AI 能力改由外部 AI 智能体通过 **MCP 协议**驱动本插件（Blender MCP 兼容）。
+详见 `报告.md`、`CHANGELOG.md` 与 `wiki/`。N 面板为**工具集模式**（每个工具按需独立执行）；
+AI 能力改由外部 AI 智能体通过 **MCP 协议**驱动本插件（Blender MCP 兼容）。
 
 > **范式变更（V0.9）**：插件不再内置 / 依赖任何本地 AI 模型（ONNX / onnxruntime / training）。
 > 所有"AI 部分"（语义识别、头发/布料/底座精修、可打印性决策）现在通过
 > **MCP（Model Context Protocol）工具** 暴露给外部 AI 智能体。智能体可连接本 Blender
 > 实例（Blender MCP 兼容桥）或独立运行 MCP 服务器，从而复用同一套领域工具。
+>
+> **半自动化（V0.11 起）**：连接件不再依赖 Boolean 求解——用户放置连接点（3D 游标），
+> 插件直接生成 watertight 的**凸柱 + 凹套筒（盲孔实体）**，零布尔、可打印后装配。
+> **多模态辅助（V0.13 起）**：N 面板上传四视图参考图（**正面必传**），多模态 AI 智能体
+> 通过 `get_reference_images` 读图 → 视觉分析 → `set_part_labels` 写回部件标注。
 
 ## 安装
 
 目标：Blender 5.2.0 LTS。
 
-### 方式 A — 通过 Blender 偏好安装（推荐，V0.6+ 提供）
+### 方式 A — 通过 Blender 偏好安装（推荐）
 
 ```bash
-python scripts/package_addon.py    # 生成 output/ai_figure_refiner.zip
+python scripts/package_addon.py    # 生成 output/ai_figure_refiner_v0.13.zip
 ```
 
 然后在 Blender 中：**Edit > Preferences > Add-ons > Install…** → 选择
-`output/ai_figure_refiner.zip` → 启用 "AI Figure Model Refiner"。
+`output/ai_figure_refiner_v0.13.zip` → 启用 "AI Figure Model Refiner"。
+
+> 最新可安装包也可直接从 `output/` 取（例如 `ai_figure_refiner_v0.13.zip`，
+> 34 个文件 / 82KB，已用隔离配置 `addon_install + enable` 验证可安装）。
 
 ### 方式 B — 直接复制到用户目录
 
@@ -60,35 +72,36 @@ build_addon_zip(output_path="/path/to/addon.zip")
 ### 测试安装
 
 ```bash
-blender --background --python scripts/test_smoke.py        # V0.1
-blender --background --python scripts/test_printability.py # V0.2
-blender --background --python scripts/test_reference.py    # V0.3
-blender --background --python scripts/test_semantic.py     # V0.4
-blender --background --python scripts/test_v0_6.py         # V0.6
-blender --background --python scripts/test_v0_8_blender.py # V0.8 算子注册校验
+blender --background --python scripts/test_smoke.py            # V0.1
+blender --background --python scripts/test_printability.py     # V0.2
+blender --background --python scripts/test_reference.py        # V0.3
+blender --background --python scripts/test_semantic.py         # V0.4
+blender --background --python scripts/test_v0_6.py             # V0.6
+blender --background --python scripts/test_v0_8_blender.py     # V0.8 算子注册校验
+blender --background --python scripts/test_connectors.py       # V0.10/V0.11 连接件
+blender --background --python scripts/test_toolset_v012.py     # V0.12 工具集
+blender --background --python scripts/test_toolset_v013.py     # V0.13 参考图+MCP
 # 全部输出 "== PASS =="
 ```
 
 > 注：V0.5 / V0.7 的回归脚本依赖已移除的本地 AI Worker / 训练数据导出，已归档至
-> `scripts/archive/`，不再纳入主测试套件。新增 `scripts/test_mcp.py`（无需 Blender）
+> `scripts/archive/`，不再纳入主测试套件。`scripts/test_mcp.py`（无需 Blender）
 > 校验 MCP 服务器工具注册与领域逻辑。
 
-## 使用流程（典型）
+## 使用流程（工具集模式，V0.12 起）
 
-1. **导入模型** — FBX / OBJ / GLB / GLTF / STL / PLY，N 面板 → 导入 / 源对象。
-2. **运行网格诊断** — 检查水密 / 重复顶点 / 边界边 / 零面积 / 体积 / bbox / 部件数。
-3. **基础修复** — 去重 / 法线重算 / 补洞；不满意可回滚到上一步快照。
-4. **可打印性分析** — 壁厚（BVH 射线） / 悬垂 / 悬空部件 / 验证（ERROR/WARNING/INFO）。
-5. **创建 4 个参考相机** + 加载参考图（FRONT/BACK/LEFT/RIGHT） — 对齐 bbox / 切视角。
-6. **应用几何启发式** 标注 HAIR/HEAD/BODY/FABRIC/BASE — 用户可手工 brush 调整。
-7. **头发精修** — 提取 HAIR → 加厚 / 或程序化生成（curl/noise/taper）。
-8. **Voronoi 减重** — 内部微结构降低材料消耗（V0.6）。
-9. **布料加厚 / 生成底座 / 合并多部件 / 自动定向** 落地。
-10. **导出 3MF** — 单 / 多 object / 装配嵌套 components（V0.6）。
-11. **调用切片器** — 端到端 3MF → INI → PrusaSlicer/OrcaSlicer → G-code 校验（V0.6/V0.7）。
-12. **AI 智能体（MCP）** — 启动面板中的 "AI 智能体 (MCP)" 桥，或在外部运行 MCP 服务器，
-    由 AI 智能体经 Blender MCP 兼容协议驱动本插件完成语义识别 / 头发·布料·底座精修 /
-    可打印性决策。
+1. **导入模型** — FBX / OBJ / GLB / GLTF / STL / PLY（N 面板 → 源对象）。
+2. **上传参考图（V0.13）** — 主面板 4 槽位（前/后/左/右）上传参考图，**正面（前）必须上传**；
+   图片供多模态 AI 智能体辅助部件标注（也可 Ctrl+Alt+Q 开 Quad View 对照）。
+3. **拆分部件** — 语义标注（启发式）→ `afr.split_by_part` 按标注拆成独立对象。
+4. **头发修正 / 布料修正** — 提取 + 加厚 / 程序化生成；布料 Solidify。
+5. **人物修正** — 网格诊断 → 基础修复 → 自动定向 / 合并 → 回滚。
+6. **连接/拼接部件（V0.11）** — 移动 3D 游标到接缝 → 生成 凸柱+套筒（零布尔）。
+7. **打印计算** — FDM 参数 + 可打印性分析（壁厚/悬垂/悬空）+ 底座 / Voronoi 减重。
+8. **导出调试** — 3MF 导出（单/多/装配）→ 切片器（INI / G-code 校验 / 端到端切片）→ 日志。
+9. **AI 智能体（MCP）** — 启动桥或外部运行 MCP 服务器，智能体经协议驱动本插件；
+   多模态智能体用 `get_reference_images` 读参考图 → `label_parts(method='vision')` /
+   `set_part_labels` 完成视觉辅助标注。
 
 ## 架构
 
@@ -97,11 +110,11 @@ addon/ai_figure_refiner/
 ├── __init__.py            # 注册、Scene 属性、版本（无 bpy 也可安全 import）
 ├── core/                  # 日志、错误、会话/快照、Pipeline
 ├── geometry/              # 诊断、修复、可打印性
-├── ui/panel.py            # N-Panel 主面板
-├── operators.py           # 核心算子（含 MCP 桥启停算子）
-├── reference/views.py     # 4 视图 + 相机 + 背景图
+├── ui/panel.py            # N-Panel 工具集（主面板 + 8 可折叠子面板 + 参考图槽位）
+├── operators.py           # 核心算子（含 MCP 桥启停 / 连接件 / 按标注拆分）
+├── reference/views.py     # 4 视图参考图 + 相机 + 背景图 + 轮廓
 ├── semantic/parts.py      # 5 部件 + 启发式 + 画笔 + 投票（AI 输出合并点）
-├── parts_ops/             # 头发/布料/底座/合并/定向/Voronoi
+├── parts_ops/             # 头发/布料/底座/合并/定向/Voronoi + 连接件(connectors.py)
 ├── exporter/              # 3MF 单/多 object/装配
 ├── slicer/                # PrusaSlicer 集成 + G-code 验证
 └── mcp/                   # AI 智能体 MCP 接口（适配 Blender MCP）
@@ -153,11 +166,20 @@ python scripts/run_mcp_server.py --host 127.0.0.1 --port 9877
 解析 `AFR_RESULT` 哨兵返回结构化结果。`backend` 默认指向 Blender MCP socket，
 亦可设为 `in-process`（在同一 Blender 进程内运行，便于测试）。
 
-### 暴露的工具（节选）
+### 暴露的工具（V0.13，共 16 个）
 
-`afr_diagnose` / `afr_repair_manifold` / `afr_printability` / `afr_semantic_label` /
-`afr_optimize_hair` / `afr_optimize_fabric` / `afr_optimize_base` / `afr_merge_parts` /
-`afr_export_3mf` / `afr_list_objects` / `afr_get_scene_summary`
+`list_objects` / `diagnose` / `repair` / `printability` / `label_parts`（`method='heuristics' |
+'flood_body' | 'vision'/'multimodal'，后者要求 FRONT 参考图已上传）/ `set_part_labels`（视觉
+标注写回）/ `get_reference_images`（多模态智能体读参考图）/ `process_hair` / `process_fabric` /
+`process_base` / `merge_parts` / `auto_orient` / `export_3mf` / `create_connector` /
+`carve_socket` / `run_blender_code`
+
+**多模态辅助标注链路（V0.13）**：
+
+```
+get_reference_images  → 多模态视觉分析（前/后/左/右四张图）
+                      → set_part_labels(逐顶点标签) 或 label_parts(method='vision')
+```
 
 ### 依赖
 
@@ -169,7 +191,8 @@ python scripts/run_mcp_server.py --host 127.0.0.1 --port 9877
 - Blender 5.2 **无原生 3MF 导入** — V0.6 自研导出（单/多/装配）；导入可在 V1.0 加。
 - **AI 推理移至外部智能体** — V0.9 起插件不再内置任何本地模型；
   AI 语义识别 / 精修策略由接入的 AI 智能体（MCP 客户端）自带环境完成。
-- **Boolean Union 在极端几何上可能失败** — 通用解算器限制；建议先修水密。
+- **AI 生成网格通常非流形** — Rodin 等工具产出的开放壳无法直接 Boolean 挖孔（会塌缩/静默失败）；
+  因此 V0.11 连接件采用**零布尔**（凸柱+套筒独立实体），Boolean 仅限流形网格使用。
 - **Voronoi 微结构**：当前是 tent-pole 骨架（线段），需要切片器按线宽挤出成实体管。
 
 ## 开源依赖
@@ -179,11 +202,15 @@ python scripts/run_mcp_server.py --host 127.0.0.1 --port 9877
 
 ## License
 
-待定（V1.0 时确定）。当前所有代码为本项目原创。
+**GPL-3.0-or-later**（详见仓库根目录 `LICENSE`）。全部源码文件均带 SPDX 头。
+
+本项目允许且鼓励基于 GPL 许可证互操作与引用其他 GPL 开源代码（例如
+[SnapSplit](https://github.com/Betakontext/snapsplit) 等 3D 打印连接件工具），
+引用时须保留其版权声明并遵守 GPL 条款。
 
 ## Git
 
 - 仓库：`https://github.com/Klisuaiji/AI-Figure-Model-Refiner`
 - 分支：`main`
-- 版本：V0.9（移除本地模型，改为 AI 智能体 MCP 接口）
+- 版本：V0.13（工具集 UI + 四视图参考图 → 多模态智能体辅助标注，协议 GPL-3.0）
 - 回归测试脚本全部 PASS；`scripts/test_mcp.py` 校验 MCP 工具注册与逻辑。

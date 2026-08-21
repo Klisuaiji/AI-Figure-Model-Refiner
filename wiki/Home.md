@@ -35,8 +35,12 @@
 | V0.8 | 代码审查 + 真实 ONNX 推理骨架 | ✅ |
 | V0.9 | 移除本地模型 → AI 智能体 MCP 接口 | ✅ |
 | V0.10 | 凹凸连接件生成 + 挖孔算子 + MCP 工具 | ✅ |
+| V0.11 | 半自动零布尔连接（凸柱+套筒） | ✅ |
+| V0.12 | 工具集 UI（拆分/头发/布料/人物/打印/导出） | ✅ |
+| V0.13 | 参考图→多模态智能体 + 协议改 GPL-3.0 | ✅ |
 
 ## 许可证
 
-本项目以 [MIT License](https://opensource.org/licenses/MIT) 发布（详见仓库根目录 `LICENSE`）。
-插件本体（Blender 端）零第三方代码依赖，全部使用 Blender 原生 API + Python stdlib。
+本项目以 [GPL-3.0-or-later](https://www.gnu.org/licenses/gpl-3.0.html) 发布（详见仓库根目录 `LICENSE`，
+全部源码文件带 SPDX 头）。插件本体（Blender 端）零第三方代码依赖，全部使用 Blender 原生 API + Python stdlib；
+MCP 服务器运行时需 `mcp` SDK（外部进程）。GPL 许可证下可与 SnapSplit 等 GPL 开源代码互操作引用。

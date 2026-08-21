@@ -1,0 +1,42 @@
+{
+  "decorations": [
+    {
+      "name": "耳环",
+      "attach": "head",
+      "scale": 0.18,
+      "parts": [
+        {"primitive": "torus", "params": {"major_radius": 1.0, "minor_radius": 0.18, "segments": 20, "ring_segments": 6}, "location": [0.0, 0.0, 0.0]},
+        {"primitive": "sphere", "params": {"radius": 0.35, "u_segments": 12, "v_segments": 10}, "location": [0.0, 0.0, 1.1]}
+      ]
+    },
+    {
+      "name": "项链",
+      "attach": "neck",
+      "scale": 0.22,
+      "parts": [
+        {"primitive": "torus", "params": {"major_radius": 1.0, "minor_radius": 0.12, "segments": 28, "ring_segments": 6}, "location": [0.0, 0.0, 0.0]}
+      ]
+    },
+    {
+      "name": "王冠",
+      "attach": "head",
+      "scale": 0.2,
+      "parts": [
+        {"primitive": "torus", "params": {"major_radius": 0.9, "minor_radius": 0.18, "segments": 24, "ring_segments": 6}, "location": [0.0, 0.0, 0.0]},
+        {"primitive": "cone", "params": {"radius1": 0.12, "radius2": 0.0, "depth": 0.5, "segments": 8}, "location": [0.0, 0.0, 0.5]},
+        {"primitive": "cone", "params": {"radius1": 0.12, "radius2": 0.0, "depth": 0.5, "segments": 8}, "location": [0.6, 0.0, 0.5]},
+        {"primitive": "cone", "params": {"radius1": 0.12, "radius2": 0.0, "depth": 0.5, "segments": 8}, "location": [-0.6, 0.0, 0.5]}
+      ]
+    },
+    {
+      "name": "长剑",
+      "attach": "right_wrist",
+      "scale": 0.25,
+      "parts": [
+        {"primitive": "box", "params": {"size": 0.18, "scale": [0.4, 0.4, 3.0]}, "location": [0.0, 0.0, 0.0]},
+        {"primitive": "cone", "params": {"radius1": 0.3, "radius2": 0.0, "depth": 1.2, "segments": 12}, "location": [0.0, 0.0, 1.8]},
+        {"primitive": "box", "params": {"size": 0.5, "scale": [1.0, 0.4, 0.4]}, "location": [0.0, 0.0, -1.8]}
+      ]
+    }
+  ]
+}
