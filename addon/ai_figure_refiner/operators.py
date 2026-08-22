@@ -1678,6 +1678,89 @@ class AFR_OT_ImportNameManifest(bpy.types.Operator, ImportHelper):
 
 
 # ---------------------------------------------------------------------------
+# Auto parting (几何自动命名 + 对称/分层细分) — 逼近 after.zip 核心
+# ---------------------------------------------------------------------------
+class AFR_OT_AutoPart(bpy.types.Operator):
+    bl_idname = "afr.auto_part"
+    bl_label = "几何切分(对称+L/R / 大块Z分层)"
+    bl_description = ("导入 AI 手办后一键几何切分：对称网格按世界 X 中面切 L/R，"
+                      "大块(如上身合并体)按 Z 高度分层。产物用占位名"
+                      "(part_XX_L / part_XX_0)，最终语义名由 AI/用户通过命名清单覆盖。"
+                      "不做任何语义猜测。")
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        from .geometry import parting as P
+        # 纯几何切分：不猜测语义名，只按几何标记决定怎么切。
+        # 命名留给 AI/用户（afr.name_part / manifest CSV）。
+
+        # --- 1) 标记待切分网格（几何启发式，仅定"切法"不定"名字"）----------
+        meshes = [o for o in context.scene.objects if o.type == "MESH"]
+        if not meshes:
+            logger.error("场景中没有可切分的网格")
+            return {"CANCELLED"}
+
+        zmin = min(P._bbox(o)[4] for o in meshes)
+        zmax = max(P._bbox(o)[5] for o in meshes)
+        zspan = max(zmax - zmin, 1e-6)
+        xmin = min(P._bbox(o)[0] for o in meshes)
+        xmax = max(P._bbox(o)[1] for o in meshes)
+        cx = (xmin + xmax) / 2.0
+
+        to_sym, to_band = [], []
+        for o in meshes:
+            sx, sy, sz = P._size(o)
+            c = P._world_center(o)
+            zr = (c.z - zmin) / zspan
+            mn, mx, ny, xy, nz, xz = P._bbox(o)
+            tag = o.get("afr_split_mode")  # 允许 AI/用户预置强制切法
+            if tag == "symmetric":
+                to_sym.append(o)
+            elif tag == "zband":
+                to_band.append(o)
+            else:
+                # 默认几何判断（只定"切法"，不定名字）：
+                # 1) 大块(竖直占比较高) -> Z 分层先处理（优先级最高）
+                if sz > 0.35 * zspan and max(sx, sy) > 0.25:
+                    to_band.append(o)
+                # 2) 否则：跨越世界 X 中面 且 明显是"成对肢体"的件 -> 对称切。
+                #    成对肢体 = 竖直长条(腿) 或 水平伸展(胳膊)。
+                #    排除：扁平大块(底座 sz<<水平)、小米粒装饰(体积过小) -> 保持单件。
+                elif (mn < cx < mx
+                      and (sz > 1.5 * max(sx, sy) or max(sx, sy) > 1.5 * sz)
+                      and sz >= 0.25 * max(sx, sy)      # 非扁平底盘
+                      and sx * sy * sz > 0.003):          # 体积下限，过滤小米粒
+                    to_sym.append(o)
+
+        # --- 2) 对称切分（快照，避免切出的子件被再次切）---------------------
+        for o in list(to_sym):
+            base = o.name
+            pair = P.split_symmetric(context, o, base)  # 占位名用原网格名
+            if pair:
+                logger.info("对称切分 %s -> %d 件" % (base, len(pair)))
+            bpy.data.objects.remove(o, do_unlink=True)
+
+        # --- 3) Z 分层切分（身体大块 -> 裙子/躯干/领子等占位层）------------
+        for o in list(to_band):
+            base = o.name
+            bands = [
+                ("%s_z0" % base, 0.0, 0.45),
+                ("%s_z1" % base, 0.45, 0.85),
+                ("%s_z2" % base, 0.85, 1.0),
+            ]
+            created = P.split_by_zbands(context, o, bands)
+            logger.info("Z分层 %s -> %d 件" % (base, len(created)))
+            bpy.data.objects.remove(o, do_unlink=True)
+
+        self.report({"INFO"}, "几何切分完成：对称 %d / Z分层 %d" % (len(to_sym), len(to_band)))
+        return {"FINISHED"}
+        # 注意：不在此处加前缀，部件名保持纯语义（头/底座/胳膊L）。
+        # 前缀由打包算子(afr_package_prefix)统一添加，避免 PWY-PWY 重复。
+        self.report({"INFO"}, "自动拆件完成：命名 %d / 对称+分层细分" % len(named))
+        return {"FINISHED"}
+
+
+# ---------------------------------------------------------------------------
 # ComfyUI texturing (AI 贴图)
 # ---------------------------------------------------------------------------
 class AFR_OT_ComfyUITexture(bpy.types.Operator):
@@ -1742,6 +1825,142 @@ class AFR_OT_ComfyUITexture(bpy.types.Operator):
         return {"FINISHED"}
 
 
+# ---------------------------------------------------------------------------
+# Phase 9 — disconnected-component split, generic fill, role heuristic
+# ---------------------------------------------------------------------------
+# These three operators work without any name-based recognition.  They are
+# what the user invokes right after importing a raw AI FBX / OBJ / STL that
+# is either:
+#   (a) one big mesh, or
+#   (b) several meshes each containing multiple bundled parts
+# so the figure is in a "messy" state, not the "labelled" state the rest of
+# AFR assumes.
+
+
+class AFR_OT_SplitDisconnectedAll(bpy.types.Operator):
+    bl_idname = "afr.split_disconnected_all"
+    bl_label = "按连通块拆分所有 MESH"
+    bl_description = ("对场景里每个 MESH 在面邻接空间做连通块检测，"
+                      "把包含 ≥2 个连通块的 MESH 拆成独立对象（每块一个）。"
+                      "每个新对象命名 ``<源>_c<idx>``。")
+    bl_options = {"REGISTER", "UNDO"}
+
+    only_selected: bpy.props.BoolProperty(
+        name="仅选中", default=False,
+        description="只对当前选中的 MESH 执行")
+    mode: bpy.props.EnumProperty(
+        name="拆分模式",
+        items=[
+            ("extras", "拆出小件（保留主体）",
+             "保留最大连通块在源对象上，拆出其他小件"),
+            ("all", "全部拆开（不留任何）",
+             "每个连通块都拆成独立 MESH；源对象留空"),
+        ],
+        default="extras")
+
+    def execute(self, context):
+        from .geometry import disconnected as disc_ops
+        objs = ([o for o in context.selected_objects if o.type == "MESH"]
+                if self.only_selected
+                else [o for o in context.scene.objects if o.type == "MESH"])
+        if not objs:
+            logger.error("没有可拆分的 MESH 对象")
+            return {"CANCELLED"}
+        skip_largest = (self.mode == "extras")
+        split_all = (self.mode == "all")
+        total_created = 0
+        for o in list(objs):
+            try:
+                res = disc_ops.split_disconnected(
+                    o, skip_largest=skip_largest, split_all=split_all)
+                created = res["created"]
+                if created:
+                    logger.info("%s: +%d extracted (sizes=%s)" % (
+                        o.name, len(created),
+                        [s["faces"] for s in res["stats"]]))
+                    total_created += len(created)
+                else:
+                    logger.info("%s: 1 component only, no split" % o.name)
+            except Exception as e:
+                logger.error("拆分 %s 失败: %s" % (o.name, e))
+        logger.info("拆分完成：新增 %d 个 MESH" % total_created)
+        return {"FINISHED"}
+
+
+class AFR_OT_FillAllMeshes(bpy.types.Operator):
+    bl_idname = "afr.fill_all_meshes"
+    bl_label = "通用填充闭合（所有 MESH）"
+    bl_description = ("对场景中所有 MESH 跑补洞+法线重置+薄壁加厚，"
+                      "不依赖 <源>_<HAIR|HEAD|BODY|FABRIC|BASE> 命名约定；"
+                      "已打 ``afr_filled`` 标记的会跳过（幂等）。")
+    bl_options = {"REGISTER", "UNDO"}
+
+    only_selected: bpy.props.BoolProperty(
+        name="仅选中", default=False)
+    force: bpy.props.BoolProperty(
+        name="强制重做", default=False)
+    solidify_thin: bpy.props.FloatProperty(
+        name="薄壁厚度 (cm)", default=0.06, min=0.0, max=1.0,
+        description="图整体是 sub-cm 模型，所以默认 0.06cm ≈ 0.6mm")
+    skip_after_split: bpy.props.BoolProperty(
+        name="拆分后小件跳过",
+        default=False,
+        description="跳过 < 200 顶点的小碎件（极可能是噪声/孤岛，强行 fill 会过度封口）")
+
+    def execute(self, context):
+        from .geometry.repair import fill_close_part
+        objs = ([o for o in context.selected_objects if o.type == "MESH"]
+                if self.only_selected
+                else [o for o in context.scene.objects if o.type == "MESH"])
+        if not objs:
+            logger.error("没有可填充的 MESH 对象")
+            return {"CANCELLED"}
+        n_done = n_skip = n_small = 0
+        for o in objs:
+            if self.skip_after_split and len(o.data.vertices) < 200:
+                n_small += 1
+                continue
+            try:
+                info = fill_close_part(o, solidify_thin=self.solidify_thin,
+                                       force=self.force)
+                if any("skip" in s for s in info):
+                    n_skip += 1
+                else:
+                    n_done += 1
+                logger.info("填充 %s: %s" % (o.name, "; ".join(info)))
+            except Exception as e:
+                logger.error("填充 %s 失败: %s" % (o.name, e))
+        logger.info("填充完成：处理 %d / 跳过(已填) %d / 跳过(小件) %d" %
+                    (n_done, n_skip, n_small))
+        return {"FINISHED"}
+
+
+class AFR_OT_ApplyRoleLabels(bpy.types.Operator):
+    bl_idname = "afr.apply_role_labels"
+    bl_label = "角色启发式（按尺寸/位置打 HAIR/HEAD/BODY/FABRIC/BASE）"
+    bl_description = ("对场景里每个 MESH，根据包围盒 z 高度比、宽高比、"
+                      "薄壁比 (vol/bbox_vol) 给它分配一个 5 类标签；"
+                      "高置信度结果写回 ``AFR_Part`` 顶点属性。")
+    bl_options = {"REGISTER", "UNDO"}
+
+    min_confidence: bpy.props.FloatProperty(
+        name="最低置信度", default=0.5, min=0.0, max=1.0,
+        description="低于此值的对象保持 UNLABELED，等待人工/AI 标注")
+
+    def execute(self, context):
+        from .geometry import role as role_ops
+        rows = role_ops.apply_role_labels(
+            context.scene, source_obj=None,
+            min_confidence=self.min_confidence)
+        n_lab = sum(1 for r in rows if r["label_id"] != 0)
+        for r in rows:
+            logger.info("  %-20s -> %-10s conf=%.2f size=%s shell=%.3f" % (
+                r["name"], r["label_name"], r["confidence"],
+                r["size"], r["shell_ratio"]))
+        logger.info("角色启发式：%d / %d 件被标上" % (n_lab, len(rows)))
+        return {"FINISHED"}
+
+
 CLASSES = (
     AFRLogEntry,
     AFRPrintSettings,
@@ -1799,7 +2018,11 @@ CLASSES = (
     AFR_OT_ToolsetStats,
     AFR_OT_NamePart,
     AFR_OT_AutoNameLR,
+    AFR_OT_AutoPart,
     AFR_OT_ExportNameManifest,
     AFR_OT_ImportNameManifest,
     AFR_OT_ComfyUITexture,
+    AFR_OT_SplitDisconnectedAll,
+    AFR_OT_FillAllMeshes,
+    AFR_OT_ApplyRoleLabels,
 )

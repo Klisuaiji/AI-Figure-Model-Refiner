@@ -167,6 +167,14 @@ class AFR_PT_Tool_Split(bpy.types.Panel):
                       icon="FILE_TEXT")
         row3.operator("afr.import_name_manifest", text="导入清单",
                       icon="FILE_FOLDER")
+        # --- Phase 9: 拆分 / 通用 fill / 角色启发式 (不依赖命名约定) -------
+        layout.separator()
+        box2 = layout.box()
+        box2.label(text="Phase 9 — 处理未标注的 AI 原始 mesh", icon="MOD_MESHDEFORM")
+        box2.label(text="(对场景里所有 MESH 直接作用，FBX 导出的 23 件 part_X 也 OK)")
+        box2.operator("afr.split_disconnected_all", icon="MESH_DATA")
+        box2.operator("afr.apply_role_labels", icon="AUTO")
+        box2.operator("afr.fill_all_meshes", icon="MOD_SOLIDIFY")
 
 
 class AFR_PT_Tool_Hair(bpy.types.Panel):
